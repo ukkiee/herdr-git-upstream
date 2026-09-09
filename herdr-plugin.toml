@@ -1,0 +1,51 @@
+id = "pull-status"
+name = "Pull Status"
+version = "0.1.0"
+# 0.7.5 부터 workspace 메타데이터 토큰과 [[startup]] 훅을 모두 쓸 수 있다.
+min_herdr_version = "0.7.5"
+description = "Keep remote-tracking refs fresh and show how far behind each Space is, on Linux, macOS, and Windows."
+platforms = ["linux", "macos", "windows"]
+
+# 의존성 없는 Go 표준 라이브러리만 쓰므로, 설치 시 go build 한 번이면 끝난다.
+[[build]]
+platforms = ["linux", "macos"]
+command = ["sh", "scripts/build.sh"]
+
+[[build]]
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/build.ps1"]
+
+# startup 훅은 일회성이다. --detach 가 데몬을 띄우고 즉시 반환하므로 훅이 깔끔하게 끝난다.
+[[startup]]
+command = ["./bin/herdr-pull-status", "daemon", "--detach"]
+
+# 포커스 이벤트는 두 가지 일을 한다.
+# 1) 방금 본 저장소를 즉시 갱신한다(스로틀 안에서).
+# 2) 데몬이 죽었거나 아직 뜨지 않았으면 띄운다. startup 훅은 plugin link/enable 때는 발화하지 않기 때문에,
+#    이 경로가 없으면 herdr 를 재시작할 때까지 아무 일도 일어나지 않는다.
+[[events]]
+on = "workspace.focused"
+command = ["./bin/herdr-pull-status", "fetch"]
+
+[[events]]
+on = "pane.focused"
+command = ["./bin/herdr-pull-status", "fetch"]
+
+[[actions]]
+id = "refresh"
+title = "Pull Status: 지금 모두 갱신"
+description = "열려 있는 모든 워크스페이스를 즉시 fetch 하고 토큰을 다시 보고한다."
+contexts = ["global"]
+command = ["./bin/herdr-pull-status", "refresh"]
+
+[[actions]]
+id = "start"
+title = "Pull Status: 데몬 시작"
+contexts = ["global"]
+command = ["./bin/herdr-pull-status", "daemon", "--detach"]
+
+[[actions]]
+id = "stop"
+title = "Pull Status: 데몬 중지"
+contexts = ["global"]
+command = ["./bin/herdr-pull-status", "stop"]

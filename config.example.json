@@ -1,0 +1,13 @@
+{
+  "interval_seconds": 60,
+  "throttle_seconds": 120,
+  "fetch_timeout_seconds": 20,
+  "stale_after_seconds": 900,
+  "behind_token": "behind",
+  "ahead_token": "ahead",
+  "stale_token": "sync_stale",
+  "behind_prefix": "↓",
+  "ahead_prefix": "↑",
+  "stale_label": "stale",
+  "enabled": true
+}
