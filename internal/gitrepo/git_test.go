@@ -47,6 +47,55 @@ type errString string
 
 func (e errString) Error() string { return string(e) }
 
+// IsMissingRemoteRef 는 영어 문구를 찾는다. 데몬이 물려받은 로캘이 무엇이든 git 이 영어로 답하도록
+// LC_ALL 을 고정해야 하고, 사용자가 둔 LC_ALL 보다 뒤에 와야 이긴다.
+func TestNonInteractiveEnvPinsLocale(t *testing.T) {
+	t.Setenv("LC_ALL", "de_DE.UTF-8")
+	t.Setenv("LANG", "de_DE.UTF-8")
+	if got := lastEnvValue(nonInteractiveEnv(), "LC_ALL"); got != "C" {
+		t.Fatalf("LC_ALL 은 C 로 고정되어야 한다: %q", got)
+	}
+}
+
+// 지워진 브랜치를 알아보는 유일한 근거가 문구이므로, 번역이 있는 로캘에서도 알아봐야 한다.
+// 그 로캘의 git 번역이 깔려 있지 않은 기계에서는 영어가 나와 그냥 통과한다.
+func TestMissingRemoteRefIsRecognizedUnderForeignLocale(t *testing.T) {
+	requireGit(t)
+	base := t.TempDir()
+	remote, _ := seedRemote(t, base)
+	work := filepath.Join(base, "work")
+	run(t, base, "git", "clone", "--quiet", remote, work)
+	t.Setenv("LC_ALL", "de_DE.UTF-8")
+	t.Setenv("LC_MESSAGES", "de_DE.UTF-8")
+	t.Setenv("LANG", "de_DE.UTF-8")
+	t.Setenv("LANGUAGE", "de")
+
+	ctx := context.Background()
+	runner := Runner{Timeout: 30 * time.Second}
+	repo, err := runner.Discover(ctx, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = runner.Fetch(ctx, repo, Upstream{Remote: "origin", RemoteRef: "refs/heads/nope", TrackingRef: "refs/remotes/origin/nope"})
+	if err == nil {
+		t.Fatal("없는 참조의 fetch 는 실패해야 한다")
+	}
+	if !IsMissingRemoteRef(err) {
+		t.Fatalf("로캘과 무관하게 사라진 원격 참조를 알아봐야 한다: %v", err)
+	}
+}
+
+// lastEnvValue 는 exec 가 실제로 쓰는 값, 곧 같은 이름 가운데 마지막 것을 돌려준다.
+func lastEnvValue(env []string, name string) string {
+	value := ""
+	for _, entry := range env {
+		if rest, ok := strings.CutPrefix(entry, name+"="); ok {
+			value = rest
+		}
+	}
+	return value
+}
+
 // 아래 시험들은 실제 git 저장소를 만들어 돌린다. 원격은 로컬 bare 저장소라 네트워크를 타지 않는다.
 func TestDiscoverAndFetchAgainstRealRepositories(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {

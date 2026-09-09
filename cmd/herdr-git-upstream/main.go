@@ -25,6 +25,7 @@ import (
 	"herdr-git-upstream/internal/config"
 	"herdr-git-upstream/internal/daemon"
 	"herdr-git-upstream/internal/freshen"
+	"herdr-git-upstream/internal/gitrepo"
 	"herdr-git-upstream/internal/herdrconfig"
 	"herdr-git-upstream/internal/herdrpaths"
 	"herdr-git-upstream/internal/setup"
@@ -234,26 +235,32 @@ func runStatus() int {
 	store := state.New()
 	cfg, cfgErr := config.Load()
 	scan, scanErr := herdrconfig.Load()
+	git := gitrepo.Runner{}
+	ctx := context.Background()
 
 	type report struct {
-		Version        string `json:"version"`
-		DaemonAlive    bool   `json:"daemon_alive"`
-		StateDir       string `json:"state_dir"`
-		LogPath        string `json:"log_path"`
-		ConfigDir      string `json:"config_dir"`
-		ConfigError    string `json:"config_error,omitempty"`
-		Enabled        bool   `json:"enabled"`
-		Interval       string `json:"interval"`
-		Throttle       string `json:"throttle"`
-		FetchTimeout   string `json:"fetch_timeout"`
-		StaleAfter     string `json:"stale_after"`
-		BehindToken    string `json:"behind_token"`
-		AheadToken     string `json:"ahead_token"`
-		GoneToken      string `json:"gone_token"`
-		MergedToken    string `json:"merged_token"`
-		CatchupToken   string `json:"catchup_token"`
-		StaleToken     string `json:"stale_token"`
-		FreshWorktrees bool   `json:"fresh_worktrees"`
+		Version     string `json:"version"`
+		DaemonAlive bool   `json:"daemon_alive"`
+		// GitVersion과 MergeTreeSupported는 catchup 토큰이 왜 비어 있는지 답한다. merge-tree 비교는
+		// git 2.38 이상에서만 하므로, 그 아래에서는 catchup이 조용히 쉬고 merged는 조상 검사만 한다.
+		GitVersion         string `json:"git_version"`
+		MergeTreeSupported bool   `json:"merge_tree_supported"`
+		StateDir           string `json:"state_dir"`
+		LogPath            string `json:"log_path"`
+		ConfigDir          string `json:"config_dir"`
+		ConfigError        string `json:"config_error,omitempty"`
+		Enabled            bool   `json:"enabled"`
+		Interval           string `json:"interval"`
+		Throttle           string `json:"throttle"`
+		FetchTimeout       string `json:"fetch_timeout"`
+		StaleAfter         string `json:"stale_after"`
+		BehindToken        string `json:"behind_token"`
+		AheadToken         string `json:"ahead_token"`
+		GoneToken          string `json:"gone_token"`
+		MergedToken        string `json:"merged_token"`
+		CatchupToken       string `json:"catchup_token"`
+		StaleToken         string `json:"stale_token"`
+		FreshWorktrees     bool   `json:"fresh_worktrees"`
 		// InvalidTokens는 설정에 적혔지만 herdr 규칙에 맞지 않아 버린 이름들이다.
 		// 사이드바에 아무것도 뜨지 않을 때 여기부터 보면 된다.
 		InvalidTokens []string `json:"invalid_token_names,omitempty"`
@@ -265,23 +272,25 @@ func runStatus() int {
 		KeyBound          bool   `json:"key_bound"`
 	}
 	out := report{
-		Version:        version,
-		DaemonAlive:    store.DaemonAlive(daemon.LockStaleAfter),
-		StateDir:       store.Dir,
-		LogPath:        store.LogPath(),
-		ConfigDir:      config.Dir(),
-		Enabled:        cfg.Enabled,
-		Interval:       cfg.Interval.String(),
-		Throttle:       cfg.Throttle.String(),
-		FetchTimeout:   cfg.FetchTimeout.String(),
-		StaleAfter:     cfg.StaleAfter.String(),
-		BehindToken:    cfg.BehindToken,
-		AheadToken:     cfg.AheadToken,
-		GoneToken:      cfg.GoneToken,
-		MergedToken:    cfg.MergedToken,
-		CatchupToken:   cfg.CatchupToken,
-		StaleToken:     cfg.StaleToken,
-		FreshWorktrees: cfg.FreshWorktrees,
+		Version:            version,
+		DaemonAlive:        store.DaemonAlive(daemon.LockStaleAfter),
+		GitVersion:         git.VersionText(ctx),
+		MergeTreeSupported: git.SupportsMergeTree(ctx),
+		StateDir:           store.Dir,
+		LogPath:            store.LogPath(),
+		ConfigDir:          config.Dir(),
+		Enabled:            cfg.Enabled,
+		Interval:           cfg.Interval.String(),
+		Throttle:           cfg.Throttle.String(),
+		FetchTimeout:       cfg.FetchTimeout.String(),
+		StaleAfter:         cfg.StaleAfter.String(),
+		BehindToken:        cfg.BehindToken,
+		AheadToken:         cfg.AheadToken,
+		GoneToken:          cfg.GoneToken,
+		MergedToken:        cfg.MergedToken,
+		CatchupToken:       cfg.CatchupToken,
+		StaleToken:         cfg.StaleToken,
+		FreshWorktrees:     cfg.FreshWorktrees,
 
 		InvalidTokens: cfg.InvalidTokenNames(),
 

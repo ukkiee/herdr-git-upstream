@@ -1,7 +1,14 @@
 // Package state는 재시작을 넘겨 기억해야 하는 것들을 파일로 남긴다.
 //
-// 두 가지를 다룬다. 하나는 저장소마다의 fetch 기록으로, 스로틀과 실패 표시의 근거가 된다.
-// 다른 하나는 데몬 잠금으로, 같은 데몬이 여러 개 뜨는 것을 막는다.
+// 네 가지를 다룬다. 참조마다의 fetch 기록은 스로틀과 실패 표시의 근거다. 원격마다의 저장소 기록은
+// 원격에 물어 알아낸 기본 브랜치를 기억한다. 브랜치마다의 따라잡기 기록은 merge-tree 판정의 캐시다.
+// 데몬 잠금은 같은 데몬이 여러 개 뜨는 것을 막는다.
+//
+// 따라잡기 기록을 fetch 기록 안에 두지 않고 따로 두는 이유가 있다. fetch 기록은 서버가 달라도 나눠
+// 쓰는 파일이라, 판정 경로가 그 파일을 읽고-고치고-쓰면 그 사이에 다른 데몬이 남긴 fetch 결과를
+// 낡은 값으로 덮는다. 쓰는 주체를 나누면 그 창이 없다. 그리고 fetch 기록은 추적 참조 단위인데
+// 따라잡기 판정은 브랜치마다 다르므로(feature1과 feature2가 같은 origin/main을 따라갈 수 있다),
+// 한 기록에 쌍 하나만 두면 서로의 캐시를 회차마다 지운다.
 //
 // 데몬 잠금에 프로세스 생존 확인을 쓰지 않고 하트비트를 쓴 이유가 있다. 프로세스가 살아 있는지
 // 확인하는 방법이 플랫폼마다 다른데(유닉스는 신호 0번, 윈도우는 OpenProcess), 하트비트는 파일에
@@ -31,7 +38,7 @@ import (
 type Store struct {
 	// Dir는 이 herdr 서버 전용 디렉터리다. 데몬 잠금과 중지 표시, 쪽지, 로그가 여기 산다.
 	Dir string
-	// Root는 모든 서버가 나눠 쓰는 뿌리다. fetch 기록이 여기 산다.
+	// Root는 모든 서버가 나눠 쓰는 뿌리다. fetch 기록, 저장소 기록, 따라잡기 기록이 여기 산다.
 	Root string
 }
 
@@ -116,12 +123,20 @@ func Key(identifier string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (s Store) recordPath(key string) string {
-	root := s.Root
-	if root == "" {
-		root = s.Dir
+// sharedRoot는 모든 서버가 나눠 쓰는 뿌리다. fetch 기록, 저장소 기록, 따라잡기 기록이 여기 산다.
+//
+// Root가 비어 있으면 Dir로 물러난다. 시험처럼 Store{Dir: ...}만 주고 만든 Store도 기록을 읽고 쓸 수
+// 있어야 하기 때문이다. 이 대체 규칙은 여기 한 곳에만 둔다. 경로 함수마다 따로 적으면 규칙을 바꿀 때
+// 한쪽을 빠뜨리기 쉽다.
+func (s Store) sharedRoot() string {
+	if s.Root != "" {
+		return s.Root
 	}
-	return filepath.Join(root, "fetch", key+".json")
+	return s.Dir
+}
+
+func (s Store) recordPath(key string) string {
+	return filepath.Join(s.sharedRoot(), "fetch", key+".json")
 }
 
 // LoadRecord는 기록을 읽는다. 파일이 없거나 깨져 있으면 빈 기록을 돌려준다.
@@ -146,6 +161,103 @@ func (s Store) SaveRecord(key string, record Record) error {
 		return err
 	}
 	return WriteFileAtomic(s.recordPath(key), raw)
+}
+
+// RepoRecord는 저장소와 원격 하나에 대해 기억해 두는 것이다. fetch 기록이 브랜치 단위인 것과 달리
+// 이것은 원격 단위다.
+//
+// 원격 기본 브랜치를 여기 적어 두는 이유가 있다. refs/remotes/<원격>/HEAD가 없는 저장소에서는
+// `ls-remote`로 원격에 물어야 하는데, 그것은 네트워크를 타므로 매 회차 부를 수 없다. 한 번 알아낸
+// 답과 마지막으로 물어본 시각을 남겨, 답이 없어도 하루에 한 번만 다시 묻는다.
+type RepoRecord struct {
+	// DefaultRemoteRef는 원격 기본 브랜치의 원격 쪽 참조(refs/heads/main), DefaultTrackingRef는
+	// 그것을 로컬에 비춘 추적 참조(refs/remotes/origin/main)다. 모르면 둘 다 비어 있다.
+	DefaultRemoteRef   string `json:"default_remote_ref,omitempty"`
+	DefaultTrackingRef string `json:"default_tracking_ref,omitempty"`
+	// DefaultCheckedUnix는 원격에 마지막으로 물어본 시각이다. 실패했어도 적는다.
+	DefaultCheckedUnix int64 `json:"default_checked_unix,omitempty"`
+}
+
+// LookupDue는 원격 기본 브랜치를 원격에 다시 물어봐야 할 때인지 답한다.
+//
+// 한 번도 물어본 적 없거나 마지막으로 물어본 지 recheck가 지났을 때다. 시도한 시각은 결과와 무관하게
+// 남으므로 닿지 않는 원격에 매 회차 묻는 일은 없다. git을 부르지 않는 순수한 물음이라 "로컬에서 아는가"와
+// 따로 두어, 아는지 모르는지는 한 번만 묻고 여기서는 시각만 본다.
+func (r RepoRecord) LookupDue(now time.Time, recheck time.Duration) bool {
+	if r.DefaultCheckedUnix == 0 {
+		return true
+	}
+	return now.Sub(time.Unix(r.DefaultCheckedUnix, 0)) >= recheck
+}
+
+func (s Store) repoRecordPath(key string) string {
+	return filepath.Join(s.sharedRoot(), "repo", key+".json")
+}
+
+// LoadRepoRecord는 저장소 기록을 읽는다. 파일이 없거나 깨져 있으면 빈 기록이다.
+// 빈 기록은 "아직 물어본 적 없음"이라 다음에 다시 알아내면 되므로, 오류로 만들지 않는다.
+func (s Store) LoadRepoRecord(key string) RepoRecord {
+	raw, err := os.ReadFile(s.repoRecordPath(key))
+	if err != nil {
+		return RepoRecord{}
+	}
+	var record RepoRecord
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return RepoRecord{}
+	}
+	return record
+}
+
+// SaveRepoRecord는 저장소 기록을 남긴다.
+func (s Store) SaveRepoRecord(key string, record RepoRecord) error {
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	return WriteFileAtomic(s.repoRecordPath(key), raw)
+}
+
+// CatchupRecord는 브랜치 하나의 따라잡기 판정 캐시다.
+//
+// merge-tree는 값이 들고 결과 트리 객체를 남기므로, (HEAD, 추적 참조 커밋) 쌍이 같으면 다시 계산하지
+// 않는다. 둘 중 하나라도 움직이면 저절로 어긋나 다시 계산된다. 판정하지 못한 경우(unknown)도 쌍과 함께
+// 남긴다. 판정이 안 되는 쌍일수록(관계없는 역사, 제한 시간 초과) 비용이 큰 쪽이라, 남기지 않으면 같은
+// 쌍에 회차마다 그 비용을 다시 치른다.
+type CatchupRecord struct {
+	Head     string `json:"head,omitempty"`
+	Tracking string `json:"tracking,omitempty"`
+	// Result는 판정 이름이다. "clean", "conflict", "unknown" 가운데 하나다.
+	Result string `json:"result,omitempty"`
+	// CheckedUnix는 판정한 시각이다. unknown은 일시적인 이유(제한 시간)일 수 있어 이 시각을 보고
+	// 한동안만 쉰 뒤 다시 시도한다. clean과 conflict는 두 커밋만으로 정해지므로 시각을 보지 않는다.
+	CheckedUnix int64 `json:"checked_unix,omitempty"`
+}
+
+func (s Store) catchupRecordPath(key string) string {
+	return filepath.Join(s.sharedRoot(), "catchup", key+".json")
+}
+
+// LoadCatchupRecord는 따라잡기 기록을 읽는다. 파일이 없거나 깨져 있으면 빈 기록이다.
+// 빈 기록은 "판정한 적 없음"이라 다시 계산하면 되므로, 오류로 만들지 않는다.
+func (s Store) LoadCatchupRecord(key string) CatchupRecord {
+	raw, err := os.ReadFile(s.catchupRecordPath(key))
+	if err != nil {
+		return CatchupRecord{}
+	}
+	var record CatchupRecord
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return CatchupRecord{}
+	}
+	return record
+}
+
+// SaveCatchupRecord는 따라잡기 기록을 남긴다.
+func (s Store) SaveCatchupRecord(key string, record CatchupRecord) error {
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	return WriteFileAtomic(s.catchupRecordPath(key), raw)
 }
 
 // lockRecordSize는 잠금 파일의 고정 길이다.

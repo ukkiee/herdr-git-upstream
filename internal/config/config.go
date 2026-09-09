@@ -78,8 +78,8 @@ type Resolved struct {
 	BehindPrefix string
 	AheadPrefix  string
 	StaleLabel   string
-	// GoneToken, MergedToken, CatchupToken은 아직 보고하지 않는 토큰이다. setup이 사이드바 행을
-	// 만들 때 이름을 알아야 하므로 먼저 설정에 자리를 둔다. 보고는 판정 기능과 함께 시작된다.
+	// GoneToken과 MergedToken은 브랜치가 원격에서 끝난 작업인지, CatchupToken은 따라잡을 때
+	// 충돌하는지 알리는 토큰이다. 판정 규칙은 internal/judge에 있다.
 	GoneToken            string
 	GoneLabel            string
 	MergedToken          string

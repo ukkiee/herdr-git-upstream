@@ -277,3 +277,125 @@ func TestSameServerResolvesToTheSameDir(t *testing.T) {
 		t.Fatal("같은 서버는 같은 자리를 가리켜야 한다")
 	}
 }
+
+// 따라잡기 기록은 fetch 기록과 다른 파일에 산다. 같은 열쇠로 저장해도 서로를 덮지 않아야, 판정 경로가
+// 다른 데몬이 남긴 fetch 결과를 되돌리는 일이 없다.
+func TestCatchupRecordRoundTripIsSeparateFromFetchRecord(t *testing.T) {
+	store := Store{Dir: t.TempDir()}
+	key := Key("catchup")
+	if got := store.LoadCatchupRecord(key); got != (CatchupRecord{}) {
+		t.Fatalf("없는 기록은 비어 있어야 한다: %+v", got)
+	}
+	fetched := Record{LastAttemptUnix: 1, LastSuccessUnix: 1}
+	if err := store.SaveRecord(key, fetched); err != nil {
+		t.Fatal(err)
+	}
+	want := CatchupRecord{Head: "aaa", Tracking: "bbb", Result: "conflict", CheckedUnix: 7}
+	if err := store.SaveCatchupRecord(key, want); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.LoadCatchupRecord(key); got != want {
+		t.Fatalf("읽어 온 따라잡기 기록이 다르다: %+v != %+v", got, want)
+	}
+	if got := store.LoadRecord(key); got != fetched {
+		t.Fatalf("따라잡기 기록이 fetch 기록을 덮었다: %+v", got)
+	}
+}
+
+// 원격에 다시 물을 때는 한 번도 물은 적 없거나 마지막 물음이 recheck 보다 오래되었을 때다.
+func TestRepoRecordLookupDue(t *testing.T) {
+	now := time.Unix(100_000, 0)
+	cases := []struct {
+		name   string
+		record RepoRecord
+		want   bool
+	}{
+		{"물은 적 없음", RepoRecord{}, true},
+		{"방금 물음", RepoRecord{DefaultCheckedUnix: now.Add(-time.Minute).Unix()}, false},
+		{"하루 안", RepoRecord{DefaultCheckedUnix: now.Add(-23 * time.Hour).Unix()}, false},
+		{"하루 지남", RepoRecord{DefaultCheckedUnix: now.Add(-25 * time.Hour).Unix()}, true},
+		{"알아냈어도 시각만 본다", RepoRecord{DefaultTrackingRef: "refs/remotes/origin/main", DefaultCheckedUnix: now.Add(-25 * time.Hour).Unix()}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.record.LookupDue(now, 24*time.Hour); got != tc.want {
+				t.Fatalf("%+v -> %v, 기대값 %v", tc.record, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRepoRecordRoundTrip(t *testing.T) {
+	store := Store{Dir: t.TempDir()}
+	key := Key("어떤/저장소\x00origin")
+	if got := store.LoadRepoRecord(key); got != (RepoRecord{}) {
+		t.Fatalf("없는 기록은 비어 있어야 한다: %+v", got)
+	}
+	want := RepoRecord{DefaultRemoteRef: "refs/heads/main", DefaultTrackingRef: "refs/remotes/origin/main", DefaultCheckedUnix: 42}
+	if err := store.SaveRepoRecord(key, want); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.LoadRepoRecord(key); got != want {
+		t.Fatalf("읽어 온 저장소 기록이 다르다: %+v != %+v", got, want)
+	}
+	// fetch 기록과 다른 자리에 산다. 같은 열쇠로 서로를 덮어쓰지 않아야 한다.
+	if got := store.LoadRecord(key); got != (Record{}) {
+		t.Fatalf("저장소 기록이 fetch 기록 자리를 덮었다: %+v", got)
+	}
+}
+
+// fetch 기록, 저장소 기록, 따라잡기 기록은 모든 서버가 나눠 쓰는 뿌리(Root)에 산다. Root 가 비어 있을 때만
+// Dir 로 물러난다.
+func TestSharedRootIsUsedForEveryRecordKind(t *testing.T) {
+	dir, root := t.TempDir(), t.TempDir()
+	store := Store{Dir: dir, Root: root}
+	key := Key("어떤/저장소")
+	if err := store.SaveRecord(key, Record{LastAttemptUnix: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveRepoRecord(key, RepoRecord{DefaultCheckedUnix: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveCatchupRecord(key, CatchupRecord{Result: "clean"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"fetch", "repo", "catchup"} {
+		if _, err := os.Stat(filepath.Join(root, kind, key+".json")); err != nil {
+			t.Fatalf("%s 기록은 Root 아래에 있어야 한다: %v", kind, err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, kind, key+".json")); err == nil {
+			t.Fatalf("%s 기록이 서버 전용 디렉터리에도 쓰였다", kind)
+		}
+	}
+
+	fallback := Store{Dir: dir}
+	if err := fallback.SaveRecord(key, Record{LastAttemptUnix: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fallback.SaveRepoRecord(key, RepoRecord{DefaultCheckedUnix: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fallback.SaveCatchupRecord(key, CatchupRecord{Result: "clean"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"fetch", "repo", "catchup"} {
+		if _, err := os.Stat(filepath.Join(dir, kind, key+".json")); err != nil {
+			t.Fatalf("Root 가 비면 %s 기록은 Dir 아래에 있어야 한다: %v", kind, err)
+		}
+	}
+}
+
+func TestLoadRepoRecordToleratesGarbage(t *testing.T) {
+	store := Store{Dir: t.TempDir()}
+	key := Key("깨진 것")
+	path := filepath.Join(store.Dir, "repo", key+".json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{이건 JSON이 아니다"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.LoadRepoRecord(key); got != (RepoRecord{}) {
+		t.Fatalf("깨진 파일은 빈 기록으로 읽어야 한다: %+v", got)
+	}
+}

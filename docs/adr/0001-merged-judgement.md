@@ -11,6 +11,12 @@ upstream이 사라진 worktree 22개를 조상 관계로 검사하면 병합된 
 통합 브랜치(`git config git-upstream.mergeTarget`, 여러 값 가능)만 상대로 한다. mfe처럼 작업이
 `origin/main`이 아니라 `origin/widget-studio/dev`로 병합되는 저장소가 있기 때문이다.
 
+조상 검사에서 자기 참조(원격마다 있는 그 브랜치의 사본과 upstream 추적 참조)와 브랜치가 아닌
+참조(`refs/pull/*/head` 같은 것)는 근거로 삼지 않고, 자기 사본이 통합 브랜치이면 아예 판정하지
+않는다. 그래도 조상 검사는 "HEAD에서 갈라져 나간 브랜치"와 "HEAD가 병합된 브랜치"를 구별하지
+못하므로, 남이 내 브랜치에서 갈라져 나가 push하면 내 브랜치에 `merged`가 붙는다. 이것도 "틀리지는
+않는" 범위 안이지만 이른 신호다.
+
 ## Considered Options
 
 - 조상 검사만: 단순하지만 squash 병합 흐름에서는 사실상 아무것도 잡지 못한다.

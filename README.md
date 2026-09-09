@@ -4,7 +4,8 @@
 
 ```
 ● mfe                 widget-studio/dev   ↓3
-  · design-qa-3       fix/modal           ↓3 ↑1
+  · design-qa-3       fix/modal           ↓3 ↑1 conflict
+  · add-widget-api    feat/widget-api     gone merged
 ● msa                 widget-studio/dev
 ```
 
@@ -23,7 +24,8 @@ herdr는 사이드바에 앞뒤 커밋 수를 그린다. 그런데 그 숫자는
 
 1. herdr에 열려 있는 저장소들의 원격 추적 참조를 주기적으로 갱신한다. 이것만으로 herdr의 내장
    `git_status` 토큰이 실제 원격 상태를 가리키게 된다.
-2. 워크스페이스마다 `$behind`와 `$ahead` 토큰을 보고한다.
+2. 워크스페이스마다 `$behind`와 `$ahead` 토큰을 보고하고, 그 브랜치가 원격에서 끝난 작업인지
+   (`$gone`, `$merged`)와 따라잡을 때 충돌하는지(`$catchup`)를 함께 보고한다.
 3. 새로 만든 worktree를 원격의 최신 상태로 맞춘다.
 
 두 번째가 필요한 이유가 있다. herdr는 같은 저장소를 공유하는 워크스페이스들을 묶어서 들여쓰는데,
@@ -80,8 +82,11 @@ rows = [
   ["state_icon", "workspace"],
   [
     "branch",
-    { token = "$behind", fg = "#f38ba8", bold = true },
-    { token = "$ahead",  fg = "#a6e3a1" },
+    { token = "$behind",  fg = "#f38ba8", bold = true },
+    { token = "$ahead",   fg = "#a6e3a1" },
+    { token = "$gone",    fg = "#6c7086" },
+    { token = "$merged",  fg = "#6c7086" },
+    { token = "$catchup", fg = "#fab387", bold = true },
     { token = "$sync_stale", fg = "#6c7086", dim = true },
   ],
 ]
@@ -108,10 +113,14 @@ rows = [
 |---|---|---|
 | `$behind` | `↓3` | 원격에 내가 아직 받지 않은 커밋이 3개 있다 |
 | `$ahead` | `↑1` | 내가 아직 올리지 않은 커밋이 1개 있다 |
+| `$gone` | `gone` | upstream 브랜치가 원격에서 사라졌다. 대개 병합된 뒤 지워진 것이다 |
+| `$merged` | `merged` | HEAD의 내용이 이미 어느 원격 브랜치에 들어가 있다 |
+| `$catchup` | `conflict` | 뒤처진 커밋을 따라잡으면 충돌한다. **충돌할 때만** 값이 있고, 깨끗하거나 뒤처지지 않았으면 빈 값이다 |
 | `$sync_stale` | `stale` | fetch가 오래 실패하고 있어 위 숫자를 믿을 수 없다 |
 
-값이 0이거나 해당 사항이 없으면 토큰이 비고, herdr가 그 자리를 지운다. 저장소가 아니거나,
-HEAD가 분리되어 있거나, upstream이 설정되지 않은 워크스페이스에서는 아무것도 표시하지 않는다.
+값이 0이거나 해당 사항이 없으면 토큰이 비고, herdr가 그 자리를 지운다. 저장소가 아니거나 커밋이
+하나도 없으면 아무것도 표시하지 않는다. HEAD가 분리되어 있거나 upstream이 없는 브랜치(아직 push 하지
+않은 새 브랜치)에서는 `$merged`만 판정한다. 방금 만든 빈 브랜치도 통합 브랜치의 조상이면 `merged`다.
 
 ## 설정
 
@@ -156,9 +165,6 @@ HEAD가 분리되어 있거나, upstream이 설정되지 않은 워크스페이�
 | `fresh_worktrees` | true | 새로 만든 worktree를 원격의 최신 상태로 맞춘다 |
 | `enabled` | true | false로 두면 이 플러그인이 올린 토큰을 지우고 쉰다 |
 
-`gone`, `merged`, `catchup` 토큰은 아직 보고하지 않는다. 판정 기능이 붙기 전에 `setup`이 사이드바
-행을 만들 때 이름을 알아야 해서 설정 자리를 먼저 두었다.
-
 토큰 이름을 빈 문자열로 두면 그 토큰은 보고하지 않는다. 설정은 매 회차마다 다시 읽으므로
 herdr를 재시작하지 않아도 주기를 바꿀 수 있다.
 
@@ -168,7 +174,8 @@ herdr를 재시작하지 않아도 주기를 바꿀 수 있다.
 herdr startup 훅 ─┐
                   ├─► 데몬 (herdr 바깥에서 계속 돎)
 포커스 이벤트 ────┘        │
-  쪽지만 남기고 즉시 끝남   ├─ 저장소마다 좁은 fetch
+  쪽지만 남기고 즉시 끝남   ├─ 저장소마다 좁은 fetch (현재 브랜치와 통합 브랜치)
+                           ├─ 워크스페이스마다 gone / merged / catchup 판정
                            └─ 워크스페이스마다 토큰 보고
 ```
 
@@ -183,8 +190,8 @@ herdr startup 훅 ─┐
 사용자가 플러그인을 방금 link하거나 enable했을 때는 발화하지 않는다. 포커스 이벤트가 데몬 생존을
 확인하도록 해 두어, 설치 직후 herdr를 재시작하지 않아도 곧 동작하기 시작한다.
 
-**fetch는 좁게 하고, 사용자의 작업을 건드리지 않는다.** 현재 브랜치의 참조 하나만 가져오고,
-태그와 prune과 하위 모듈은 손대지 않으며 자동 정리(`gc.auto`)도 꺼 둔다. `--no-write-fetch-head`로
+**fetch는 좁게 하고, 사용자의 작업을 건드리지 않는다.** 참조를 하나씩 좁게 가져오고(현재 브랜치의
+upstream과 통합 브랜치 각각), 태그와 prune과 하위 모듈은 손대지 않으며 자동 정리(`gc.auto`)도 꺼 둔다. `--no-write-fetch-head`로
 `FETCH_HEAD`를 다시 쓰지 않는데, 이것이 없으면 사용자가 손으로 fetch한 뒤 `git merge FETCH_HEAD`를
 하려던 참에 엉뚱한 커밋을 병합하게 된다. `GIT_OPTIONAL_LOCKS=0`으로 부가적인 잠금도 잡지 않는다.
 
@@ -222,6 +229,55 @@ ssh를 지정하며, 그 경우에도 멈춤은 제한 시간이 걷어 낸다.
 **첫 실패로는 경고하지 않는다.** 잠시 끊긴 네트워크나 아직 연결하지 않은 VPN 때문에 곧바로
 `stale`이 뜨면, 정작 사람이 손봐야 하는 상황과 구별되지 않는다. 실패가 이어진 시간을 기준으로 삼는다.
 
+**`gone`은 fetch 실패에서 읽는다.** 현재 브랜치의 upstream을 참조 하나로 좁게 가져오므로, 원격에서
+그 브랜치가 지워지면 fetch가 "원격 참조 없음"으로 실패한다. 그 기록이 곧 `gone`이다. `ls-remote`도
+prune도 부르지 않으므로 값이 0이고, 사용자의 참조를 지우지도 않는다. 이 실패는 다시 시도해도 같으므로
+`stale`로 세지 않는다. 근거를 더 요구하지 않으므로 원격에서 지워지고 로컬에서 prune까지 된 뒤에 처음
+본 브랜치도 `gone`이다. 커밋이 하나도 없는 저장소만 뺀다. 빈 원격을 clone한 직후에도 git이
+`branch.main`을 잡아 두어 같은 실패가 나지만, 태어나지 않은 브랜치는 사라질 수 없기 때문이다.
+
+**`merged`는 조상 검사와 merge-tree 비교로 판정한다.** 먼저 `git for-each-ref --contains HEAD
+refs/remotes/`로 자기 참조가 아닌 원격 브랜치가 HEAD를 품고 있는지 본다. 자기 참조란 원격마다 있는
+이 브랜치의 사본(`refs/remotes/<원격>/<브랜치>`)과 upstream 추적 참조다. push만 해도 사본은 HEAD를
+품으므로 그것은 근거가 아니고, `refs/pull/*/head`처럼 브랜치가 아닌 것을 가져오는 참조 사양의
+목적지도 세지 않는다. 로컬 명령 하나라 참조가 수백 개여도 값이 싸다. 그것으로 잡히지 않으면 통합
+브랜치마다 `git merge-tree --write-tree <통합> HEAD`를 돌려, 결과 트리가 통합 브랜치의 트리와
+같으면(병합해도 아무것도 바뀌지 않으면) `merged`로 본다. 이 비교가 squash 병합과 rebase 병합을
+잡는다. 근거는 [ADR 0001](docs/adr/0001-merged-judgement.md)에 있다.
+
+통합 브랜치는 원격 기본 브랜치에 저장소별로 지정한 것을 더한 목록이다. 원격 기본 브랜치는
+`refs/remotes/<원격>/HEAD`가 실제 참조를 가리키면 그것이고(원격이 기본 브랜치를 바꾼 뒤 남은 낡은
+별명은 믿지 않는다), 없으면 fetch와 같은 자리에서 `ls-remote --symref`로 하루에 한 번 물어 기록하고
+그 회차부터 쓴다. 그것마저 실패해 끝내 모르면 `merged`를 판정하지 않는다. 통합 브랜치 자체를
+체크아웃한 자리를 가려낼 수 없어, 거기서 갈라져 나간 원격 브랜치 하나만 있어도 조상 검사가 `merged`를
+붙이기 때문이다. 작업이 `origin/main`이 아니라 `origin/develop` 같은 곳으로
+병합되는 저장소에서는 그 저장소에서 이렇게 알려 준다. 값은 여러 개 둘 수 있고, 연결된 worktree
+전부가 함께 쓴다.
+
+```sh
+git config --add git-upstream.mergeTarget origin/develop
+```
+
+**`merged`는 놓칠 수 있어도 틀리지는 않는다.** 병합 뒤 통합 브랜치가 같은 파일을 다시 고쳤으면
+merge-tree 비교로는 잡히지 않는다. 그래서 끝난 작업의 주된 신호는 `gone`이고, `merged`는 그것을
+보태는 신호다. 자기 참조는 근거로 삼지 않으므로 push만 한 브랜치가 그 이유만으로 `merged`가 되지는
+않고, 통합 브랜치 자체를 체크아웃한 자리(main 위의 main)는 아예 판정하지 않는다. 다만 조상 검사는
+"HEAD에서 갈라져 나간 브랜치"와 "HEAD가 병합된 브랜치"를 구별하지 못한다. 내 브랜치에서 남이
+갈라져 나가 push하면 그 참조가 HEAD를 품으므로 내 브랜치에 `merged`가 붙는다.
+
+**`catchup`은 병합해 보되 작업 트리는 건드리지 않는다.** `git merge-tree --write-tree <추적 참조>
+HEAD`의 종료 코드로 충돌 여부를 안다. 뒤처짐이 0보다 클 때만 계산하고, 결과를 (HEAD, 추적 참조 커밋)
+쌍과 함께 브랜치마다의 따라잡기 기록에 남겨 쌍이 같으면 다시 계산하지 않는다. 같은 `origin/main`을
+따라가는 브랜치가 여럿이어도 서로의 캐시를 지우지 않고, fetch 기록과 다른 파일이라 판정이 다른
+세션의 데몬이 남긴 fetch 결과를 덮지도 않는다. 판정하지 못한 쌍(관계없는 역사, 제한 시간 초과)도
+남겨 한 시간 안에는 다시 시도하지 않는다. `merge-tree --write-tree`는 git 2.38에서 생겼으므로 그
+아래에서는 이 토큰만 조용히 쉬고, `merged`는 조상 검사만 한다. `status`의 `merge_tree_supported`가
+그 사실을 알려 준다.
+
+**통합 브랜치도 함께 가져온다.** 통합 브랜치의 추적 참조가 낡으면 `merged` 판정도 낡는다. 그래서
+저장소마다 통합 브랜치 각각을 별도의 fetch 작업으로 두되, 현재 브랜치가 곧 통합 브랜치면 한 번만
+가져간다. 스로틀은 다른 fetch와 같은 규칙을 따른다.
+
 ## 명령
 
 ```sh
@@ -247,7 +303,11 @@ herdr plugin action invoke stop    --plugin git-upstream   # 데몬 중지
 tail -f "$(./bin/herdr-git-upstream status | sed -n 's/.*"log_path": "\(.*\)".*/\1/p')"
 ```
 
-상세 로그가 필요하면 `HERDR_GIT_UPSTREAM_DEBUG=1`을 준 채로 데몬을 다시 띄운다.
+상세 로그가 필요하면 `HERDR_GIT_UPSTREAM_DEBUG=1`을 준 채로 데몬을 다시 띄운다. `merged`가 붙은
+이유(조상 검사인지, 어느 통합 브랜치와의 merge-tree 비교인지)도 이 수준에서 보인다.
+
+`catchup`이 한 번도 뜨지 않으면 `status`의 `git_version`과 `merge_tree_supported`를 본다.
+git 2.38 미만에서는 이 토큰이 쉰다.
 
 아무것도 보이지 않는다면 대개 둘 중 하나다. 사이드바 `rows`에 토큰을 넣지 않았거나,
 사이드바를 접어 두었거나(접힌 상태에서는 herdr가 번호와 상태 점만 그린다). 앞의 경우는 `status`의
@@ -257,7 +317,13 @@ tail -f "$(./bin/herdr-git-upstream status | sed -n 's/.*"log_path": "\(.*\)".*/
 
 - 평소에는 fetch만 한다. 작업 트리를 건드리는 것은 갓 만든 worktree를 앞당길 때 한 번뿐이며,
   그것도 빨리 감기라 잃을 것이 없다. `fresh_worktrees`를 false로 두면 그마저 하지 않는다.
-- git 2.5 이상이면 된다. 오래된 배포판의 git에서도 동작하도록, 최근에 생긴 옵션은 쓰지 않는다.
+- fetch와 토큰 보고는 git 2.5 이상이면 된다. 오래된 배포판의 git에서도 동작하도록, 최근에 생긴
+  옵션은 쓰지 않는다. `merged`의 조상 검사(`for-each-ref --contains`)는 2.7, merge-tree 비교와
+  `catchup`은 2.38 이상에서만 돌고 그 아래에서는 조용히 쉰다.
+- `merge-tree --write-tree`는 결과 트리 객체를 객체 저장소에 남긴다. 다만 같은 두 커밋을 다시
+  병합하면 같은 트리가 나와 새로 쓰이지 않고, `catchup`은 (HEAD, 추적 참조 커밋) 쌍이 같으면 아예
+  부르지 않으므로 반복 실행으로 저장소가 자라지는 않는다. 남는 객체는 어디에서도 참조되지 않아
+  `git gc`가 알아서 거둔다. 자동 정리(`gc.auto`)는 이 명령에서도 꺼 둔다.
 - 사이드바에 아무것도 뜨지 않으면 `status`의 `invalid_token_names`부터 본다. herdr는 한 요청의
   토큰 이름을 통째로 검사하므로, 이름 하나가 규칙(`[A-Za-z0-9_-]`, 32자 이하)에 어긋나면
   그 요청 전체가 거절된다. 이 플러그인은 어긋난 이름을 미리 걸러 내고 거기에 적어 둔다.

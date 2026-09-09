@@ -1,4 +1,5 @@
-// Package gitrepo는 저장소를 찾아내고, 원격 추적 참조를 갱신하고, 앞뒤 커밋 수를 센다.
+// Package gitrepo는 저장소를 찾아내고, 원격 추적 참조를 갱신하고, 앞뒤 커밋 수를 세고,
+// 판정(internal/judge)에 쓸 재료를 git에게 묻는다.
 //
 // 여기서 하는 일은 herdr가 사이드바에 그리는 값과 정확히 같은 근거를 만드는 것이다. herdr는
 // HEAD와 원격 추적 참조(refs/remotes/...)를 비교해 ↑↓를 그리지만, 그 참조를 스스로 갱신하지는
@@ -131,16 +132,31 @@ func canonical(path string) string {
 	return filepath.Clean(path)
 }
 
+// CurrentBranch는 체크아웃된 브랜치 이름을 돌려준다. HEAD가 분리되어 있으면 빈 문자열이고 오류가 아니다.
+//
+// "분리됨"과 "저장소가 아님"을 가른다. symbolic-ref --quiet는 분리된 HEAD에서 1로, 그 밖의 실패에서
+// 128로 끝나므로 종료 코드로 구별한다. upstream이 없어도 브랜치 이름은 필요하다. merged 판정이
+// 자기 사본(refs/remotes/<원격>/<브랜치>)을 근거에서 빼려면 이름을 알아야 하기 때문이다.
+func (r Runner) CurrentBranch(ctx context.Context, repo Repo) (string, error) {
+	res, err := r.gitExit(ctx, repo.Root, localTimeout, nonInteractiveEnv(), "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	switch res.code {
+	case 0:
+		return firstLine(res.stdout), nil
+	case 1:
+		return "", nil
+	default:
+		return "", res.asError([]string{"symbolic-ref"})
+	}
+}
+
 // Upstream은 현재 브랜치가 따라가는 원격 브랜치를 알아낸다.
 func (r Runner) Upstream(ctx context.Context, repo Repo) (Upstream, error) {
-	// symbolic-ref는 HEAD가 분리되어 있으면 실패한다. 그 상태에서는 비교할 브랜치가 없으므로
-	// 여기서 끝내는 것이 맞다.
-	out, err := r.git(ctx, repo.Root, localTimeout, "symbolic-ref", "--quiet", "--short", "HEAD")
-	if err != nil {
-		return Upstream{}, ErrNoUpstream
-	}
-	branch := firstLine(out)
-	if branch == "" {
+	// HEAD가 분리되어 있으면 비교할 브랜치가 없으므로 여기서 끝내는 것이 맞다.
+	branch, err := r.CurrentBranch(ctx, repo)
+	if err != nil || branch == "" {
 		return Upstream{}, ErrNoUpstream
 	}
 	return r.UpstreamFor(ctx, repo, branch)
@@ -187,50 +203,138 @@ func (r Runner) trackingRef(ctx context.Context, repo Repo, branch, remote, remo
 	if ref, err := r.gitLine(ctx, repo.Root, "rev-parse", "--symbolic-full-name", branch+"@{upstream}"); err == nil && ref != "" {
 		return ref
 	}
+	return r.TrackingRefFor(ctx, repo, remote, remoteRef)
+}
+
+// TrackingRefFor는 로컬 브랜치 없이 원격과 원격 참조만으로 추적 참조 이름을 만든다.
+//
+// 통합 브랜치처럼 로컬에 대응하는 브랜치가 없는 참조에 쓴다. 그런 참조는 @{upstream}으로 물을 수
+// 없으므로, 원격에 설정된 fetch 참조 사양에 대입하고 그것도 없으면 관례를 따른다.
+func (r Runner) TrackingRefFor(ctx context.Context, repo Repo, remote, remoteRef string) string {
 	if ref := r.trackingRefFromRefspec(ctx, repo, remote, remoteRef); ref != "" {
 		return ref
 	}
 	return "refs/remotes/" + remote + "/" + strings.TrimPrefix(remoteRef, "refs/heads/")
 }
 
-// trackingRefFromRefspec은 원격에 설정된 fetch 참조 사양에 remoteRef를 대입해 목적지 이름을 만든다.
-// 참조 사양을 손댄 저장소에서는 refs/remotes/<원격>/<브랜치>라는 통념이 맞지 않기 때문에,
-// 관례로 넘어가기 전에 실제 설정을 먼저 본다.
-func (r Runner) trackingRefFromRefspec(ctx context.Context, repo Repo, remote, remoteRef string) string {
-	out, err := r.git(ctx, repo.Root, localTimeout, "config", "--get-all", "remote."+remote+".fetch")
-	if err != nil {
-		return ""
+// RemoteRefFor는 추적 참조 이름에서 원격 쪽 참조 이름을 거꾸로 알아낸다.
+//
+// refs/remotes/<원격>/HEAD가 가리키는 것은 추적 참조인데, fetch 하려면 원격 쪽 이름이 있어야 한다.
+// TrackingRefFor와 같은 참조 사양을 거꾸로 대입하고, 그것도 없으면 관례를 거꾸로 적용한다.
+// 어느 쪽으로도 짝을 못 찾으면 빈 문자열이다. 그때는 fetch 만 못 할 뿐 로컬 판정에는 쓸 수 있다.
+func (r Runner) RemoteRefFor(ctx context.Context, repo Repo, remote, trackingRef string) string {
+	if ref := r.remoteRefFromRefspec(ctx, repo, remote, trackingRef); ref != "" {
+		return ref
 	}
-	for _, spec := range splitLines(out) {
-		spec = strings.TrimPrefix(spec, "+")
-		source, destination, found := strings.Cut(spec, ":")
-		if !found || source == "" || destination == "" {
-			continue
-		}
-		// 별표가 없는 사양은 한 참조만 짝짓는다.
-		if !strings.Contains(source, "*") {
-			if source == remoteRef {
-				return destination
-			}
-			continue
-		}
-		prefix, suffix, _ := strings.Cut(source, "*")
-		if !strings.HasPrefix(remoteRef, prefix) || !strings.HasSuffix(remoteRef, suffix) {
-			continue
-		}
-		middle := remoteRef[len(prefix) : len(remoteRef)-len(suffix)]
-		if !strings.Contains(destination, "*") {
-			continue
-		}
-		return strings.Replace(destination, "*", middle, 1)
+	if rest, ok := strings.CutPrefix(trackingRef, "refs/remotes/"+remote+"/"); ok && rest != "" {
+		return "refs/heads/" + rest
 	}
 	return ""
 }
 
-// CountsFor는 HEAD와 추적 참조 사이의 앞뒤 커밋 수를 센다.
+// remoteRefFromRefspec은 trackingRefFromRefspec의 역방향이다. 목적지에 추적 참조를 맞춰 보고 출발지를 만든다.
+func (r Runner) remoteRefFromRefspec(ctx context.Context, repo Repo, remote, trackingRef string) string {
+	for _, spec := range r.fetchRefspecs(ctx, repo, remote) {
+		if ref, ok := substituteRefspec(spec.destination, spec.source, trackingRef); ok {
+			return ref
+		}
+	}
+	return ""
+}
+
+// trackingRefFromRefspec은 원격에 설정된 fetch 참조 사양에 remoteRef를 대입해 목적지 이름을 만든다.
+// 참조 사양을 손댄 저장소에서는 refs/remotes/<원격>/<브랜치>라는 통념이 맞지 않기 때문에,
+// 관례로 넘어가기 전에 실제 설정을 먼저 본다.
+func (r Runner) trackingRefFromRefspec(ctx context.Context, repo Repo, remote, remoteRef string) string {
+	for _, spec := range r.fetchRefspecs(ctx, repo, remote) {
+		if ref, ok := substituteRefspec(spec.source, spec.destination, remoteRef); ok {
+			return ref
+		}
+	}
+	return ""
+}
+
+// refspec은 fetch 참조 사양 하나다. 출발지는 원격 쪽 이름, 목적지는 로컬에 비출 이름이다.
+type refspec struct {
+	source      string
+	destination string
+}
+
+// fetchRefspecs는 원격에 설정된 fetch 참조 사양들을 읽는다.
+//
+// 참조 사양을 읽고 해석하는 규칙은 여기 한 곳에만 둔다. 정방향(원격 참조 → 추적 참조)과 역방향이
+// 각자 읽으면 규칙을 손볼 때 한쪽만 고쳐져 두 방향이 어긋난다. 앞의 "+"는 강제 갱신 표시라 뗀다.
+// ":"가 없거나 한쪽이 빈 사양(부정 사양 "^..." 포함)은 짝지을 수 없으므로 뺀다.
+func (r Runner) fetchRefspecs(ctx context.Context, repo Repo, remote string) []refspec {
+	out, err := r.git(ctx, repo.Root, localTimeout, "config", "--get-all", "remote."+remote+".fetch")
+	if err != nil {
+		return nil
+	}
+	var specs []refspec
+	for _, line := range splitLines(out) {
+		source, destination, found := strings.Cut(strings.TrimPrefix(line, "+"), ":")
+		if !found || source == "" || destination == "" {
+			continue
+		}
+		specs = append(specs, refspec{source: source, destination: destination})
+	}
+	return specs
+}
+
+// substituteRefspec은 ref를 pattern에 맞춰 보고, 맞으면 template의 별표 자리에 대입한 이름을 돌려준다.
+//
+// 별표가 없는 pattern은 한 참조만 짝지으므로 template을 그대로 돌려준다. pattern에는 별표가 있는데
+// template에는 없으면 대입할 자리가 없으니 짝이 아니다.
+func substituteRefspec(pattern, template, ref string) (string, bool) {
+	middle, ok := matchRefspecSide(pattern, ref)
+	if !ok {
+		return "", false
+	}
+	if !strings.Contains(pattern, "*") {
+		return template, true
+	}
+	if !strings.Contains(template, "*") {
+		return "", false
+	}
+	return strings.Replace(template, "*", middle, 1), true
+}
+
+// matchRefspecSide는 참조 사양의 한쪽(출발지나 목적지)에 ref를 맞춰 보고, 별표 자리에 든 부분을 돌려준다.
+// 별표가 없으면 정확히 같아야 한다. 앞뒤가 겹칠 만큼 짧은 ref는 맞지 않는 것으로 본다.
+func matchRefspecSide(pattern, ref string) (middle string, ok bool) {
+	if !strings.Contains(pattern, "*") {
+		return "", pattern == ref
+	}
+	prefix, suffix, _ := strings.Cut(pattern, "*")
+	if len(ref) < len(prefix)+len(suffix) || !strings.HasPrefix(ref, prefix) || !strings.HasSuffix(ref, suffix) {
+		return "", false
+	}
+	return ref[len(prefix) : len(ref)-len(suffix)], true
+}
+
+// branchSource는 참조 사양의 출발지가 브랜치(refs/heads/ 아래)를 가리킬 수 있는지 답한다.
+//
+// "refs/*"처럼 더 넓은 패턴도 브랜치를 품으므로 브랜치로 본다. 브랜치가 아니라고 확실히 말할 수 있는
+// 것만 걸러야, 사용자가 손댄 참조 사양 때문에 멀쩡한 원격 브랜치가 판정에서 빠지는 일이 없다.
+// GitHub의 refs/pull/*/head, GitLab의 refs/merge-requests/*/head가 브랜치가 아닌 대표적인 출발지다.
+func branchSource(source string) bool {
+	prefix, _, _ := strings.Cut(source, "*")
+	return strings.HasPrefix(prefix, "refs/heads/") || strings.HasPrefix("refs/heads/", prefix)
+}
+
+// CountsFor는 지금 체크아웃된 HEAD와 추적 참조 사이의 앞뒤 커밋 수를 센다.
 // 추적 참조가 아직 로컬에 없으면(한 번도 fetch하지 않은 브랜치) 셀 수 없으므로 오류를 돌려준다.
 func (r Runner) CountsFor(ctx context.Context, repo Repo, up Upstream) (Counts, error) {
-	out, err := r.gitLine(ctx, repo.Root, "rev-list", "--left-right", "--count", "HEAD..."+up.TrackingRef)
+	return r.CountsBetween(ctx, repo, "HEAD", up.TrackingRef)
+}
+
+// CountsBetween은 주어진 커밋과 추적 참조 사이의 앞뒤 커밋 수를 센다.
+//
+// 데몬은 "HEAD"라는 이름 대신 회차 첫머리에 읽어 둔 커밋을 넘긴다. 한 회차는 fetch 제한 시간만큼
+// 길어질 수 있어 그 사이 사용자가 브랜치를 바꾸는 일이 드물지 않은데, 이름으로 세면 뒤처짐은 새 HEAD를,
+// 같은 회차의 merged와 catchup은 옛 HEAD를 말해 한 행의 토큰들이 서로 다른 커밋 이야기를 하게 된다.
+func (r Runner) CountsBetween(ctx context.Context, repo Repo, head, trackingRef string) (Counts, error) {
+	out, err := r.gitLine(ctx, repo.Root, "rev-list", "--left-right", "--count", head+"..."+trackingRef)
 	if err != nil {
 		return Counts{}, err
 	}
@@ -389,8 +493,43 @@ func (r Runner) git(ctx context.Context, dir string, timeout time.Duration, args
 	return r.gitWithEnv(ctx, dir, timeout, nonInteractiveEnv(), args...)
 }
 
-// gitWithEnv는 환경을 지정해 git 명령을 실행한다.
+// gitWithEnv는 환경을 지정해 git 명령을 실행한다. 종료 코드가 0이 아니면 오류다.
 func (r Runner) gitWithEnv(ctx context.Context, dir string, timeout time.Duration, env []string, args ...string) ([]byte, error) {
+	res, err := r.gitExit(ctx, dir, timeout, env, args...)
+	if err != nil {
+		return nil, err
+	}
+	if res.code != 0 {
+		return nil, res.asError(args)
+	}
+	return res.stdout, nil
+}
+
+// gitResult는 끝까지 돈 git 명령의 결과다.
+type gitResult struct {
+	stdout []byte
+	stderr string
+	code   int
+	// exit는 종료 코드가 0이 아닐 때의 원래 오류다. 메시지에 "exit status N"을 그대로 남기기 위해 둔다.
+	exit error
+}
+
+// asError는 0이 아닌 종료 코드를 지금까지 쓰던 것과 같은 모양의 오류로 만든다.
+// IsMissingRemoteRef가 이 문구 안의 stderr를 보고 판단하므로 모양을 바꾸면 안 된다.
+func (res gitResult) asError(args []string) error {
+	name := subcommand(args)
+	if res.stderr != "" {
+		return fmt.Errorf("git %s: %w: %s", name, res.exit, res.stderr)
+	}
+	return fmt.Errorf("git %s: %w", name, res.exit)
+}
+
+// gitExit는 git 명령을 끝까지 돌리고 종료 코드까지 돌려준다.
+//
+// 종료 코드가 뜻을 갖는 명령이 있어서 따로 둔다. merge-tree --write-tree는 1로 "충돌"을 알리고,
+// config --get-all은 1로 "그런 키가 없다"를 알린다. 둘 다 실패가 아니라 답이다. 오류는 명령을 띄우지
+// 못했거나, 제한 시간이나 취소로 끝까지 돌지 못했을 때만 돌려준다.
+func (r Runner) gitExit(ctx context.Context, dir string, timeout time.Duration, env []string, args ...string) (gitResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -410,24 +549,41 @@ func (r Runner) gitWithEnv(ctx context.Context, dir string, timeout time.Duratio
 	// 종료 신호를 보낸 뒤에도 붙잡고 있지 않도록, 잠깐 기다렸다가 파이프를 놓는다.
 	cmd.WaitDelay = 2 * time.Second
 
-	if err := cmd.Run(); err != nil {
-		name := subcommand(args)
-		detail := strings.TrimSpace(stderr.String())
-		if ctxErr := ctx.Err(); errors.Is(ctxErr, context.DeadlineExceeded) {
-			return nil, fmt.Errorf("git %s: 제한 시간 초과", name)
-		}
-		if detail != "" {
-			return nil, fmt.Errorf("git %s: %w: %s", name, err, detail)
-		}
-		return nil, fmt.Errorf("git %s: %w", name, err)
+	err := cmd.Run()
+	res := gitResult{stdout: stdout.Bytes(), stderr: strings.TrimSpace(stderr.String())}
+	if err == nil {
+		return res, nil
 	}
-	return stdout.Bytes(), nil
+	name := subcommand(args)
+	// 컨텍스트가 끝났으면 제한 시간이든 취소든 언제나 실패다. 우리가 죽인 프로세스의 종료 코드를
+	// 답으로 읽으면 안 된다. 유닉스에서는 신호로 죽어 -1이라 아래에서 걸러지지만, 윈도우는
+	// TerminateProcess가 종료 코드 1을 남기므로 데몬이 꺼지는 순간 config --get-all은 "키 없음"으로,
+	// merge-tree는 "충돌"로 읽힌다.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		if errors.Is(ctxErr, context.DeadlineExceeded) {
+			return gitResult{}, fmt.Errorf("git %s: 제한 시간 초과", name)
+		}
+		return gitResult{}, fmt.Errorf("git %s: 취소됨", name)
+	}
+	// 신호로 죽은 경우는 종료 코드가 -1이다. 그것은 답이 아니라 실패다.
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() >= 0 {
+		res.code = exitErr.ExitCode()
+		res.exit = err
+		return res, nil
+	}
+	if res.stderr != "" {
+		return gitResult{}, fmt.Errorf("git %s: %w: %s", name, err, res.stderr)
+	}
+	return gitResult{}, fmt.Errorf("git %s: %w", name, err)
 }
 
 // nonInteractiveEnv는 git이 사람에게 무언가를 물어보다 멈추는 일이 없도록 환경을 다듬는다.
 // 배경에서 도는 작업이 자격 증명 프롬프트를 띄우면 제한 시간까지 그대로 매달려 있게 된다.
 //
 // ssh 설정은 여기서 건드리지 않는다. 사용자가 정해 둔 것을 덮을 위험이 있어 fetchEnv가 따로 판단한다.
+//
+// 같은 이름이 겹치면 exec는 뒤에 오는 값을 쓴다. 그래서 물려받은 환경 뒤에 덧붙이는 것으로 덮어쓴다.
 func nonInteractiveEnv() []string {
 	return append(os.Environ(),
 		"GIT_TERMINAL_PROMPT=0",
@@ -435,6 +591,12 @@ func nonInteractiveEnv() []string {
 		"GCM_INTERACTIVE=never",
 		// 인덱스 같은 부가적인 잠금을 잡지 않아, 사용자가 동시에 쓰는 git과 부딪히지 않는다.
 		"GIT_OPTIONAL_LOCKS=0",
+		// git의 문구를 영어로 고정한다. 이 플러그인이 git 출력을 문구로 판단하는 자리는
+		// IsMissingRemoteRef 하나뿐인데, 그것이 gone 판정의 유일한 근거다. 데몬이 물려받은 로캘이
+		// 독일어나 프랑스어면 git이 번역된 문구를 내어 지워진 브랜치를 알아보지 못한다. 사용자가
+		// LC_ALL을 이미 두었을 수 있으므로 LC_MESSAGES만으로는 부족하다. 나머지 출력은 해시와 참조
+		// 이름이라 로캘을 고정해도 해석이 달라지지 않는다. git 자신의 시험 묶음도 이렇게 한다.
+		"LC_ALL=C",
 	)
 }
 
