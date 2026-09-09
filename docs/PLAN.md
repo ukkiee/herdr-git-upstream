@@ -8,6 +8,8 @@ herdr는 로컬 git 상태를 잘 보여 주지만 원격에는 한 번도 말�
 숫자는 마지막으로 누군가 fetch 한 시점의 이야기이고, 새로 만든 worktree는 손에 쥔 낡은 커밋에서
 시작한다. 이 플러그인은 원격 쪽 일을 대신 맡아 그 두 가지를 고친다.
 
+용어는 [CONTEXT.md](../CONTEXT.md)를 따른다. 되돌리기 어려운 결정은 [adr/](adr/)에 있다.
+
 ## 경계
 
 무엇을 넣을지 판단하는 기준은 하나다. **원격을 알아야만 답할 수 있는 질문인가.**
@@ -28,6 +30,7 @@ herdr는 로컬 git 상태를 잘 보여 주지만 원격에는 한 번도 말�
 | 스택 브랜치 깊이 | herdr-git-stack |
 | 로컬 작업 트리 상태(+2 ~1 ?3) | herdr-git-status, herdr-git-detail |
 | worktree 목록 이동 | herdr 내장 `open_worktree` |
+| 로컬 브랜치 정리 | 이 플러그인의 경계 바깥. [ADR 0002](adr/0002-removal-boundary.md) |
 
 worktree 삭제는 경계에 걸쳐 있다. herdr-shear가 이미 잘하지만 판정 기준이 **로컬** 기본 브랜치라,
 로컬 main이 뒤처져 있으면 이미 병합된 브랜치를 살아 있는 것으로 잘못 분류한다. 우리는 원격 기준으로
@@ -43,18 +46,50 @@ worktree 삭제는 경계에 걸쳐 있다. herdr-shear가 이미 잘하지만 �
 
 시험 53개가 통과하고 여섯 플랫폼에서 교차 컴파일된다. 아직 herdr 에 붙이지 않았다.
 
-구조는 이렇다.
+구조는 이렇다. 별표는 앞으로 생길 디렉터리다.
 
 ```
 cmd/herdr-git-upstream/   명령 진입점
 internal/config/          설정 읽기, 토큰 이름 검사
 internal/daemon/          갱신 루프, 잠금, 쪽지, 워크스페이스 훑기
 internal/freshen/         새 worktree 최신화
-internal/gitrepo/         저장소 찾기, upstream 해석, fetch, 빨리 감기
+internal/gitrepo/         저장소 찾기, upstream 해석, fetch, 빨리 감기, 판정 재료
 internal/herdrcli/        herdr CLI 감싸기
 internal/herdrpaths/      herdr 와 같은 규칙으로 디렉터리 찾기
 internal/state/           fetch 기록, 데몬 잠금
+internal/herdrconfig/  *  사용자 config.toml 을 파싱 없이 훑기 (setup 과 경로 미리보기가 공유)
+internal/setup/        *  붙여 넣을 설정을 만들어 출력
+internal/judge/        *  gone / merged / 따라잡기 판정과 worktree 판정 규칙
+internal/tui/          *  의존성 없는 터미널 화면 기반 (raw 모드, 키 입력, 그리기)
+internal/worktreeui/   *  worktree 화면과 생성 팝업
 ```
+
+## 실측으로 확인한 사실
+
+설계는 아래 사실에 기댄다. 짐작으로 적은 것은 없다.
+
+- 지워진 원격 브랜치를 지금처럼 좁게 fetch 하면 `couldn't find remote ref` 로 실패한다.
+  이 문구는 이미 `IsMissingRemoteRef` 가 잡아 영구 실패로 기록한다.
+- refspec 여러 개를 한 번의 fetch 에 담으면 하나만 없어도 전체가 실패하고 아무것도 갱신되지 않는다.
+  그래서 참조는 하나씩 가져온다.
+- `git merge-tree --write-tree <통합 브랜치> HEAD` 의 결과 트리가 통합 브랜치의 트리와 같으면
+  squash 병합도 잡아낸다. 다만 병합 뒤 통합 브랜치가 같은 파일을 다시 고쳤으면 놓친다.
+- `git worktree add -b <새> <경로> origin/<브랜치>` 처럼 원격 추적 참조를 시작점으로 주면 git 이
+  새 브랜치의 upstream 을 그 원격 브랜치로 자동 설정한다. 지역 브랜치를 시작점으로 주면 생기지 않는다.
+- `herdr worktree list` 는 현재 워크스페이스(또는 `--cwd`)가 속한 저장소의 worktree 전부를
+  `path`, `branch`, `open_workspace_id`, `is_linked_worktree`, `is_prunable`, `is_detached` 와 함께 준다.
+  `source.repo_name` 이 저장소 이름이다.
+- `herdr worktree create --branch --base --path --cwd --focus`, `herdr worktree open --path --focus`,
+  `herdr worktree remove --workspace <id>`, `herdr workspace focus <id>` 가 있다.
+- 플러그인이 실행 중에 pane 을 여는 통로는 `herdr plugin pane open --plugin <id> --entrypoint <pane-id>
+  [--placement overlay|split|tab|zoomed] [--focus]` 다. CLI 의 `--placement` 목록에는 `popup` 이 없고,
+  매니페스트 `[[panes]]` 의 `placement` 에는 `popup` 과 `width`/`height` 가 있다.
+  `--placement` 를 비웠을 때 매니페스트 값을 따르는지는 붙여 본 뒤에 안다.
+- herdr 기본 키에 `rename_workspace = "prefix+shift+w"` 가 있다. `prefix+shift+u` 는 비어 있다.
+- herdr 는 `[worktrees] directory` (기본 `~/.herdr/worktrees`) 로 worktree 뿌리를 바꿀 수 있다.
+- 실제 저장소(mfe) 의 worktree 27개 가운데 22개가 git 자체 판정으로 upstream `[gone]` 이다.
+  그중 조상 관계로 병합이 잡히는 것은 0개, merge-tree 비교로 잡히는 것은 7개다. 병합 대상은
+  `origin/main` 이 아니라 `origin/widget-studio/dev` 인 경우가 많다.
 
 ## 앞으로 넣을 것
 
@@ -64,10 +99,7 @@ internal/state/           fetch 기록, 데몬 잠금
 키를 묶어야 화면이 열린다. 둘 다 하지 않으면 fetch 만 돌아 herdr 내장 `git_status` 가 정확해지는
 데까지다. 그것만으로도 값어치가 있지만, 나머지 절반이 조용히 잠들어 있는 셈이다.
 
-조사한 플러그인들이 하나같이 "설정을 넣기 전에는 아무것도 보이지 않는다"를 경고문으로 달고 있었다.
-같은 자리에서 넘어지지 않으려면 붙여 넣을 것을 우리가 만들어 주어야 한다.
-
-**무엇을.**
+**무엇을.** 붙여 넣을 설정을 출력한다.
 
 ```
 $ herdr-git-upstream setup
@@ -77,121 +109,182 @@ $ herdr-git-upstream setup
 [ui.sidebar.spaces]
 rows = [
   ["state_icon", "workspace"],
-  ["branch", { token = "$behind", fg = "#f38ba8" }, { token = "$ahead", fg = "#a6e3a1" }],
+  [
+    "branch",
+    { token = "$behind",  fg = "#f38ba8", bold = true },
+    { token = "$ahead",   fg = "#a6e3a1" },
+    { token = "$gone",    fg = "#6c7086" },
+    { token = "$merged",  fg = "#6c7086" },
+    { token = "$catchup", fg = "#fab387", bold = true },
+    { token = "$sync_stale", fg = "#6c7086", dim = true },
+  ],
 ]
 
 [[keys.command]]
-key = "prefix+shift+w"
+key = "prefix+shift+u"
 type = "plugin_action"
 command = "git-upstream.worktrees"
-description = "worktree board"
+description = "git upstream: worktrees"
+
+# 기준 브랜치를 고르는 생성 팝업. herdr 내장 팝업 대신 쓰려면 주석을 풀고 new_worktree 키를 비운다.
+# [[keys.command]]
+# key = "prefix+shift+g"
+# type = "plugin_action"
+# command = "git-upstream.new-worktree"
+# description = "git upstream: new worktree"
+
+통합 브랜치가 origin/HEAD 가 아닌 저장소에서는 그 저장소에서 이렇게 알려 주세요.
+  git config --add git-upstream.mergeTarget origin/develop
 
 그다음: herdr config check && herdr server reload-config
 ```
 
-**어떻게.** 사용자의 `config.toml` 을 읽어 이미 `[ui.sidebar.spaces]` 를 쓰고 있으면 그 행에 우리
-토큰만 끼워 넣은 결과를 보여 준다. 이미 우리 토큰이 있으면 그 부분은 빼고 남은 것만 알려 준다.
+**어떻게.** TOML 을 파싱하지 않는다. 표준 라이브러리에 파서가 없고, 의존성을 더할 만한 일이 아니다.
+config.toml 본문에서 `[ui.sidebar.spaces]`, `$behind` 같은 토큰 이름, `git-upstream.worktrees` 문자열이
+있는지만 찾는다. 이미 `[ui.sidebar.spaces]` 를 쓰고 있으면 rows 전체 대신 "이 토큰 항목들을 그 행에
+더하라"고 토큰 항목만 보여 준다. 이미 우리 토큰이나 키가 있으면 그 부분은 빼고 남은 것만 알려 준다.
+토큰 이름은 설정(config.json)에서 바꾼 값을 그대로 쓴다. 이 훑기는 `internal/herdrconfig` 에 두어
+생성 팝업의 경로 미리보기(`[worktrees] directory`)와 `status` 가 함께 쓴다.
 
 **파일을 말없이 고치지 않는다.** 남의 설정 파일을 손대는 플러그인은 신뢰를 잃는다. 출력만 하고
 붙여 넣는 것은 사람이 한다.
 
-**작다.** 언제 넣어도 되지만 먼저 넣으면 나머지를 시험하기 편해진다.
+**`status` 에 두 필드를 더한다.** `sidebar_configured` (우리 토큰이 하나라도 rows 에 있음),
+`key_bound` (worktrees 액션이 키에 묶여 있음). 아무것도 안 보인다고 느낀 사람이 `status` 를 쳤을 때
+답을 얻게 한다. 부르지 않은 알림은 띄우지 않는다.
 
 ### 1. 병합·삭제 판정 (`$gone`, `$merged`)
 
 **왜.** worktree 를 열 개 넘게 열어 두면 어느 것이 끝난 작업인지 사람이 기억하지 못한다.
 원격을 봐야만 답이 나오는 질문이다.
 
-**무엇을.** 워크스페이스마다 토큰 하나를 더 보고한다.
+**무엇을.** 워크스페이스마다 토큰 둘을 더 보고한다. 값은 라벨 문자열이고, 해당 없으면 빈 값이다.
 
-| 토큰 | 뜻 |
-| --- | --- |
-| `$gone` | 원격에서 그 브랜치가 사라졌다. 대개 병합 후 삭제된 것이다 |
-| `$merged` | 원격 기본 브랜치에 이미 병합되었다 |
+| 토큰 | 값 | 뜻 |
+| --- | --- | --- |
+| `$gone` | `gone` | upstream 브랜치가 원격에서 사라졌다. 대개 병합 후 삭제된 것이다 |
+| `$merged` | `merged` | HEAD 의 내용이 이미 어느 원격 브랜치에 들어가 있다 |
 
-**어떻게.**
+설정 키는 `gone_token`/`gone_label`, `merged_token`/`merged_label`. 이름을 비우면 보고하지 않는다.
 
-- `gone`: fetch 뒤에도 추적 참조가 없으면. prune 없이 알아내려면 `git ls-remote --heads <원격> <참조>`가
-  빈 답을 주는지 본다. 지금 fetch 는 `--no-prune` 이라 추적 참조만으로는 판단할 수 없다.
-- `merged`: `git merge-base --is-ancestor HEAD <원격 기본 브랜치>` 가 참이면 병합된 것이다.
-  원격 기본 브랜치는 `refs/remotes/<원격>/HEAD` 에서 읽고, 없으면 판정하지 않는다.
+**`gone` 은 어떻게.** 마지막 좁은 fetch 가 "원격 참조 없음"으로 영구 실패했으면 `gone` 이다.
+fetch 기록의 `LastErrorPermanent` 가 이미 그 사실을 담고 있으므로 `ls-remote` 도 prune 도 필요 없다.
+비용이 0이다. upstream 이 없는 브랜치는 `gone` 을 판정하지 않는다.
 
-**열린 질문.** `ls-remote` 를 저장소마다 매번 부르면 fetch 한 번이 두 번이 된다. 스로틀을 따로 두거나,
-기본 브랜치 하나만 넓게 fetch 해서 prune 을 켜는 방법을 견줘 봐야 한다.
+**`merged` 는 어떻게.** [ADR 0001](adr/0001-merged-judgement.md). 둘 중 하나면 `merged` 다.
 
-### 2. 따라잡을 때 충돌하는지 미리 보기
+1. 조상 검사. `git for-each-ref --contains HEAD refs/remotes/` 에 자기 추적 참조가 아닌 것이 하나라도
+   있으면. 로컬 명령 하나라 참조가 수백 개여도 값이 싸다. 설정이 없어도 "어딘가에 병합되었다"를 잡는다.
+2. merge-tree 비교. 통합 브랜치마다 `git -c gc.auto=0 merge-tree --write-tree <통합> HEAD` 의 결과
+   트리가 `<통합>^{tree}` 와 같으면. git 2.38 이상에서만 하고, 그 아래에서는 조상 검사만 한다.
+
+통합 브랜치는 원격 기본 브랜치에 `git config --get-all git-upstream.mergeTarget` 의 값들을 더한 것이다.
+원격 기본 브랜치는 `refs/remotes/<원격>/HEAD` 에서 읽고, 없으면 `git ls-remote --symref <원격> HEAD` 를
+저장소당 한 번 불러 fetch 기록에 함께 저장하고, 그것마저 실패하면 판정하지 않는다.
+
+**upstream 이 없어도 판정한다.** 아직 push 하지 않은 새 브랜치도 `merged` 일 수 있다(dev 에서 방금
+만든 빈 브랜치는 HEAD 가 `origin/dev` 의 조상이다). 화면과 사이드바가 같은 답을 내야 한다. 그때 원격은
+하나뿐이면 그것, 아니면 `origin`, 그것도 없으면 판정하지 않는다.
+
+**데몬은 통합 브랜치도 가져온다.** 통합 브랜치의 추적 참조가 낡으면 판정도 낡는다. 저장소(CommonDir)마다
+통합 브랜치 각각을 별도의 fetch 작업으로 둔다. 현재 브랜치가 곧 통합 브랜치면 FetchKey 가 같아 한 번만
+가져간다. 스로틀은 기존 규칙을 그대로 따른다.
+
+**한계는 문서에 적는다.** `merged` 는 놓칠 수 있어도 틀리지는 않는다. 주된 신호는 `gone` 이다.
+
+### 2. 따라잡을 때 충돌하는지 미리 보기 (`$catchup`)
 
 **왜.** `↓12` 만으로는 결정을 못 한다. 열두 개 뒤처졌지만 깨끗하게 따라잡히는 것과, 세 개인데 손이
 가는 것은 사람이 할 일이 다르다. 조사한 1,045개 플러그인 중 아무도 하지 않는다.
 
-**무엇을.** `$catchup` 토큰. 값은 `clean` 또는 `conflict`.
+**무엇을.** `$catchup` 토큰. **충돌할 때만** 라벨(기본 `conflict`)을 채우고, 깨끗하거나 뒤처지지
+않았으면 빈 값이다. 사이드바에서 눈에 띄어야 할 것은 충돌뿐이고, `clean` 은 화면(3번)에서 보여 준다.
+설정 키는 `catchup_token`/`catchup_conflict_label`.
 
-**어떻게.** `git merge-tree --write-tree <추적 참조> HEAD` 의 종료 코드로 판단한다. 0 이 아니면
-충돌이다. **작업 트리를 전혀 건드리지 않는다.** 실측으로 확인했다.
+**어떻게.** `git -c gc.auto=0 merge-tree --write-tree <추적 참조> HEAD` 의 종료 코드로 판단한다.
+0 이면 깨끗, 1 이면 충돌, 그 밖은 판정 불가. **작업 트리를 전혀 건드리지 않는다.** 결과 트리 객체가
+객체 저장소에 남지만, 아래 캐시 덕에 그 양은 무시할 만하다.
 
-git 2.38 이상이 필요하다. 그보다 낮으면 이 토큰만 조용히 쉰다. 나머지 기능은 git 2.5 이상에서 돈다.
-
-**열린 질문.** 뒤처진 것이 없으면 계산할 필요가 없다. 뒤처짐이 생겼을 때만 계산하고 결과를 커밋 쌍으로
-캐시하면 비용이 거의 없다.
+- 뒤처짐이 0보다 클 때만 계산한다.
+- 결과를 (HEAD, 추적 참조 커밋) 쌍과 함께 fetch 기록에 저장하고, 쌍이 같으면 다시 계산하지 않는다.
+- git 2.38 미만이면 이 토큰만 조용히 쉰다. 나머지 기능은 git 2.5 이상에서 돈다.
 
 ### 3. worktree 화면
 
 **왜.** 1번과 2번의 판정이 모이면 "어느 것부터 손봐야 하나"에 답하는 표가 된다.
-사이드바 토큰은 한 줄에 조금씩만 보여 줄 수 있어서, 열세 개를 한눈에 견주려면 화면이 필요하다.
+사이드바 토큰은 한 줄에 조금씩만 보여 줄 수 있어서, 스물일곱 개를 한눈에 견주려면 화면이 필요하다.
 
-**무엇을.** worktree 판을 보여 주는 화면 하나. 세 갈래로 연다.
+**무엇을.** 한 저장소의 worktree 전부를 판정과 함께 보이는 화면 하나. 세 갈래로 연다.
 
 | 통로 | 쓰임새 |
 | --- | --- |
-| 키 설정 (`type = "plugin_action"`) | 평소 사용. 이것이 정상적인 통로다 |
+| 키 설정 (`type = "plugin_action"`, `git-upstream.worktrees`) | 평소 사용. 이것이 정상적인 통로다 |
 | `herdr plugin action invoke worktrees --plugin git-upstream` | 스크립트나 시험 |
 | `herdr-git-upstream worktrees` | 터미널에서 직접. 데몬 없이도 돈다 |
 
-앞의 둘은 팝업으로 열리고, 마지막은 지금 있는 페인에 그대로 그린다.
+앞의 둘은 액션이 `herdr plugin pane open --plugin git-upstream --entrypoint worktrees --focus` 를 불러
+매니페스트의 `placement = "popup"` 을 따르게 한다. 붙여 본 뒤 매니페스트 값을 따르지 않는 것으로
+확인되면 `--placement overlay` 로 물러난다. 마지막은 지금 있는 페인에 그대로 그린다.
 
 herdr 에는 액션을 골라 실행하는 화면이 없고, 액션의 `contexts` 는 아직 쓰이지 않는다
 (자세한 것은 [HERDR.md](HERDR.md)). 그래서 **키에 묶기 전에는 없는 것과 같다.**
-아래 0번의 `setup` 명령이 그 설정을 내놓는 이유가 이것이다.
+0번의 `setup` 명령이 그 설정을 내놓는 이유가 이것이다.
 
 ```
- mfe · 13 worktrees                            ↑↓ move  ⏎ open
+ mfe · 27 worktrees                     fetched 3s ago    ↑↓ move  ⏎ open  r refresh
 
- safe    add-shopping-widget-api   gone, merged        8 kB
- safe    fix-design-detail         merged upstream    12 kB
- review  design-qa-3               ↓12, conflicts     34 MB
- review  packages                  dirty               8 kB
- keep    agent-admin               up to date        156 kB
- keep    fix-modal                 ↓3, clean catch-up  8 kB
- blocked widget-studio/dev         main checkout     456 MB
+ safe    add-shopping-widget-api   gone, merged
+ safe    fix-design-detail         merged
+ review  design-qa-3               ↓12, conflicts
+ review  packages                  dirty
+ review  DEMO-1570                 gone, unpushed?
+ keep    agent-admin               up to date
+ keep    fix-modal                 ↓3, clean catch-up
+ blocked widget-studio/dev         main checkout
+ blocked fix-agent                 agent working
 
- 3 safe · d remove selected · D remove all safe
+ 2 safe · d remove selected · D remove all safe · q close
 ```
 
-`design-qa-3` 과 `fix-modal` 을 견줘 보면 이 화면이 왜 필요한지 드러난다. 하나는 열두 개 뒤처졌지만
-따라잡을 때 손이 가고, 다른 하나는 세 개 뒤처졌지만 깨끗하게 따라잡힌다. 숫자만으로는 어느 쪽을
-먼저 손볼지 정할 수 없다.
+**저장소는 하나다.** 액션으로 열면 `HERDR_WORKSPACE_ID` 가 속한 저장소, 터미널에서 부르면 현재
+디렉터리의 저장소를 `herdr worktree list` 로 나열한다. 그 자리가 git 저장소가 아니면 그렇게 알리고 닫는다.
+herdr 에 닿지 않으면(데몬 없이 터미널에서 부른 경우 등) `git worktree list --porcelain` 으로 대신하되,
+그때는 "herdr 에 열려 있음" 정보가 없다.
+
+**열릴 때 스스로 원격을 본다.** 데몬은 herdr 에 열린 워크스페이스만 돌기 때문에(mfe 는 27개 중 2개)
+나머지의 상태를 모른다. 열자마자 로컬 참조로 표를 먼저 그리고, 배경에서 두 명령을 나란히 돌린 뒤
+다시 그린다.
+
+- `git fetch --quiet --no-tags --no-prune --no-write-fetch-head <원격>` (전체 브랜치, 왕복 한 번)
+- `git ls-remote --heads <원격>` (사라진 브랜치 판정, 왕복 한 번)
+
+prune 은 하지 않는다. README 의 약속을 지키고, 사용자의 참조를 건드리지 않는다. 화면에서의 `gone` 은
+`ls-remote` 결과에 브랜치가 없는 것이다. `r` 키로 다시 돌린다.
+
+**판정 규칙.** CONTEXT.md 의 정의와 같다.
 
 | 판정 | 조건 |
 | --- | --- |
-| `safe` | 깨끗하고, 원격에서 사라졌거나 원격 기본 브랜치에 병합됨 |
-| `review` | 깨끗하지 않거나, 뒤처졌거나, 판단이 필요함 |
-| `keep` | 아직 일이 남음 |
-| `blocked` | 본 체크아웃이거나 잠겨 있음. 지울 수 없음 |
+| `blocked` | 본 체크아웃이거나(`is_linked_worktree` 가 거짓), `git worktree lock` 으로 잠겼거나, 디렉터리가 사라졌거나(`is_prunable`), herdr 에서 에이전트가 일하는 중(`agent_status` 가 working) |
+| `safe` | 손대지 않았고(`git status --porcelain --untracked-files=all` 이 비어 있음), 그리고 `merged` 이거나 (`gone` 이면서 앞선 커밋이 0임을 확인할 수 있음) |
+| `review` | 손댄 것이 있거나, 따라잡을 때 충돌하거나, `gone` 인데 앞선 커밋이 있거나 확인할 수 없음(추적 참조가 이미 지워짐) |
+| `keep` | 그 밖의 전부. 최신이거나 깨끗하게 따라잡을 수 있는 진행 중인 작업 |
 
-**shear 와 무엇이 다른가.** 화면 모양은 닮았지만 답이 다르다. shear 의 `merged` 는 **로컬** 기본
-브랜치 기준이라, 내 로컬 main 이 사흘 전 것이면 동료가 어제 병합한 브랜치를 아직 살아 있는 것으로
-분류한다. 우리는 원격 참조를 계속 갱신하고 있으므로 `origin/main` 기준으로 판정한다.
-뒤처진 정도와 충돌 예상은 shear 에 아예 없는 열이다.
+정렬은 판정 순서(safe, review, keep, blocked) 다음에 브랜치 이름이다.
 
-**어떻게.** herdr 플러그인 pane 을 `popup` 으로 열고 그 안에서 대화형 화면을 그린다.
-삭제는 `safe` 인 것만 허용한다.
+**키.**
 
-- herdr 에 열려 있으면 `herdr worktree remove --workspace <id>`
-- 디스크에만 있으면 `git worktree remove <경로>`
+| 키 | 동작 |
+| --- | --- |
+| `↑` `↓` `j` `k` | 이동 |
+| `Enter` | herdr 에 열려 있으면 `herdr workspace focus <id>`, 아니면 `herdr worktree open --path <경로> --focus`. 그리고 화면을 닫는다 |
+| `d` | 선택한 것이 `safe` 면 확인 없이 지운다. 아니면 이유를 아래 줄에 보여 준다 |
+| `D` | `safe` 전부를 "Remove N worktrees? y/N" 한 번 묻고 지운다 |
+| `r` | 다시 fetch |
+| `q` `Esc` | 닫기 |
 
-**강제 삭제는 넣지 않는다.** 깨끗한 worktree 를 지우면 체크아웃만 사라지고 브랜치와 커밋은 남는다.
-잃을 것이 없는 것만 지우므로 되돌리기 기록도 필요 없다. 손댄 것이 있으면 지우지 않고 이유를 보여 준다.
-shear 가 되돌리기 기록에 들인 공은 강제 삭제를 지원하기 때문이며, 우리는 그 문을 열지 않는다.
+**삭제.** [ADR 0002](adr/0002-removal-boundary.md). herdr 에 열려 있으면 `herdr worktree remove
+--workspace <id>`, 디스크에만 있으면 `git worktree remove <경로>`. 강제 삭제는 없다. 브랜치는 남긴다.
 
 **뒤로 미룰 것.** 디스크 사용량은 worktree 마다 디렉터리를 훑어야 해서 화면이 느려진다.
 먼저 만들고 반응을 본 뒤 넣는다. `--json` 출력도 나중에 쉽게 붙는다.
@@ -199,7 +292,7 @@ shear 가 되돌리기 기록에 들인 공은 강제 삭제를 지원하기 때
 **넣지 않을 것.** CI 용 리포트 출력. 이 플러그인은 사람이 보는 화면을 위한 것이고, CI 에서 낡은
 worktree 를 세는 일은 herdr 와 무관한 자리에서 하는 편이 맞다.
 
-### 4. 기준 브랜치를 고르는 worktree 생성 팝업
+### 4. 기준 브랜치를 고르는 생성 팝업
 
 **왜.** herdr 기본 팝업은 브랜치 이름만 받고 기준은 언제나 `HEAD` 다. 어디서 갈라져 나오는지
 사람이 고를 수 없다.
@@ -214,8 +307,9 @@ worktree 를 세는 일은 herdr 와 무관한 자리에서 하는 편이 맞다
 │                                                        │
 │  Base                                                  │
 │  ▸ widget-studio/dev              current · ↓3 behind  │
-│    origin/widget-studio/dev       remote · up to date  │
-│    origin/main                    remote · up to date  │
+│    origin/widget-studio/dev       upstream · up to date│
+│    origin/main                    default · up to date │
+│    origin/widget-studio/dev       merge target         │
 │                                                        │
 │  Tab switch · Enter create · Esc cancel                │
 └────────────────────────────────────────────────────────┘
@@ -223,19 +317,32 @@ worktree 를 세는 일은 herdr 와 무관한 자리에서 하는 편이 맞다
 
 정해 둔 규칙.
 
+- 기준 후보는 네 종류를 이 순서로 모으고 중복을 없앤다. 현재 브랜치, 그 upstream, 원격 기본 브랜치,
+  저장소에 지정된 통합 브랜치들. 지역 브랜치 전체를 나열하지는 않는다
+- 팝업이 열릴 때 후보들의 추적 참조를 좁게 fetch 해서 "↓3 behind" / "up to date" 를 채운다.
+  fetch 가 끝나기 전에도 입력은 받는다
 - 커서는 브랜치 칸에서 시작하고, 자동으로 채운 이름이 통째로 선택되어 있다. 타이핑하면 덮어써진다
-- 자동 이름은 기준 브랜치 이름에서 따오되 **언제나 비어 있는 이름**이다. 겹치면 `-2`, `-3` 으로 넘어간다.
-  로컬 브랜치, 원격 브랜치, 열려 있는 worktree 셋을 모두 보고 빈 번호를 찾는다
+- 자동 이름은 기준 브랜치 이름(원격이면 `origin/` 을 뗀 것)에서 따오되 **언제나 비어 있는 이름**이다.
+  겹치면 `-2`, `-3` 으로 넘어간다. 로컬 브랜치, 원격 추적 참조, 열려 있는 worktree 셋을 모두 보고
+  빈 번호를 찾는다
 - 기준의 기본 선택은 현재 브랜치. 뒤처져 있어도 생성 직후 자동 최신화가 앞당긴다
 - 기준을 바꾸면 이름과 경로가 따라오되, 이름을 한 글자라도 직접 고친 뒤에는 덮어쓰지 않는다
-- 경로는 herdr 의 `branch_to_path_slug` 규칙을 그대로 옮겨 만든다
+- 경로 미리보기는 `<[worktrees] directory>/<저장소 이름>/<슬러그>` 다. 뿌리는 config.toml 을
+  `internal/herdrconfig` 로 훑어 읽고, 없으면 `~/.herdr/worktrees`. 슬러그는 herdr 의
+  `branch_to_path_slug` 규칙(영숫자는 소문자로, 나머지는 대시 하나로, 앞뒤 대시 제거)을 그대로 옮긴다
 - 새 브랜치인지 기존 브랜치인지는 표시하지 않는다. herdr 가 이름을 보고 알아서 가른다
 - UI 문구는 영문
 
-**어떻게.** `herdr worktree create --branch <입력> --base <선택>` 을 부른다. `--path` 는 비워
+**어떻게.** `herdr worktree create --branch <입력> --base <선택> --focus` 를 부른다. `--path` 는 비워
 herdr 의 자리 규칙을 그대로 쓴다.
 
-**옵트인이다.** 액션으로만 노출하고 기본 키를 잡지 않는다. 키를 묶기 전에는 없는 것과 같다.
+**원격 추적 참조를 기준으로 했으면 upstream 을 푼다.** git 은 그 경우 새 브랜치의 upstream 을 기준
+원격 브랜치로 자동 설정하는데, 그대로 두면 `$behind` 가 main 대비 숫자를 보이고 `git pull` 이 main 을
+기능 브랜치에 병합한다. 생성 직후 그 worktree 에서 `git branch --unset-upstream` 을 한다. 처음 push 할
+때까지 토큰이 비는 것은 HEAD 에서 만들었을 때와 같은 동작이다.
+
+**옵트인이다.** 액션 `git-upstream.new-worktree` 로만 노출하고 기본 키를 잡지 않는다. `setup` 은
+주석 처리된 키 설정을 덧붙여 보여 준다.
 
 ## 순서와 이유
 
@@ -249,6 +356,10 @@ herdr 의 자리 규칙을 그대로 쓴다.
 
 3번과 4번이 같은 터미널 화면 코드를 쓴다. 한 번 만들어 두면 두 번째는 값이 싸다.
 
+**herdr 에는 다 만든 뒤에 붙인다.** 항목마다 커밋을 따로 두되, `herdr plugin link` 와 실측은 0~4 를
+모두 마친 뒤 한 번에 한다. 삭제처럼 되돌릴 수 없는 동작은 실제 저장소가 아니라 임시 저장소에서만
+시험한다.
+
 ## 터미널 화면 기반 (3번에서 만든다)
 
 의존성 없이 간다. raw 모드는 플랫폼마다 다르지만 표준 라이브러리로 닿는다.
@@ -256,16 +367,19 @@ herdr 의 자리 규칙을 그대로 쓴다.
 - 유닉스: `syscall.Termios` 와 `TCGETS`/`TIOCGETA`
 - 윈도우: `GetConsoleMode`/`SetConsoleMode`
 
-`internal/tui` 에 두고, 화면은 `internal/worktreeui` 에 둔다. 나중에 팝업만 떼어 내고 싶어지면
-그 두 디렉터리와 `internal/gitrepo` 만 옮기면 되도록 경계를 그어 둔다.
+`internal/tui` 에 두고, 화면은 `internal/worktreeui` 에 둔다. 그리기 로직은 플랫폼과 무관한 순수
+함수(모델 → 줄 목록)로 두어 시험한다. 윈도우 구현은 같은 변경에 넣되 교차 컴파일까지만 확인하고,
+실측하지 못했다는 사실을 README 에 적는다. 매니페스트의 `[[panes]]` 와 화면 액션은 세 플랫폼 모두에
+선언한다(file-viewer 가 0.7.1 시절 윈도우에서 상대 경로 pane 명령이 실패한다고 적어 두었는데,
+0.9.0 에서도 그런지는 사용자 보고로 안다).
+
+## 문서 마무리
+
+- README 는 지금 한국어로 둔다. 작업이 끝나면 영문을 `README.md` 로 기본으로 두고, 한국어는
+  `README.ko.md` 로 옮겨 서로 링크한다.
+- 판 번호를 0.2.0 으로 올린다.
+- HERDR.md 에 이번에 실측한 herdr 동작(plugin pane open 통로, worktree CLI 옵션, 기본 키, worktree 뿌리 설정)을 더한다.
 
 ## 열린 질문
 
-**README 를 영문으로 옮길 것인가.** 지금은 한국어다. 마켓플레이스에 올려 발견되기를 바란다면
-영문이 유리하다. 코드 주석은 한국어로 두어도 무방하다.
-
-**설정을 넣지 않은 사용자에게 알릴 것인가.** `setup` 명령(0번)은 물어본 사람에게만 답한다.
-데몬이 시작할 때 사용자의 `config.toml` 을 읽어 우리 토큰이 없으면 herdr 알림으로 한 번 알리는
-방법도 있다. 친절하지만, 부르지 않은 알림은 소음이 되기 쉬워 아직 정하지 않았다.
-
-**`ls-remote` 비용.** 1번의 `gone` 판정 방식에 달렸다. prune 을 켜는 대안과 견주어야 한다.
+모두 정리되었다. 정리 과정은 CONTEXT.md 와 adr/ 에 남아 있다.
