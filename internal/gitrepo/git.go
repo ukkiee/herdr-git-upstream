@@ -118,9 +118,14 @@ func (r Runner) Upstream(ctx context.Context, repo Repo) (Upstream, error) {
 	if err != nil || remote == "" {
 		return Upstream{}, ErrNoUpstream
 	}
-	// 원격 이름이 아니라 URL이 적혀 있는 경우가 있다. 이때는 fetch로 갱신할 원격 추적 참조가 없으므로
-	// 이 플러그인이 할 수 있는 일이 없다.
-	if strings.Contains(remote, "/") || strings.Contains(remote, ":") {
+	// "."은 같은 저장소 안의 다른 브랜치를 따라간다는 뜻이다(git branch --set-upstream-to=main).
+	// 가져올 원격이 없으므로 이 플러그인이 할 일이 없다.
+	if remote == "." {
+		return Upstream{}, ErrNoUpstream
+	}
+	// 이름 모양으로 짐작하지 않고 git에게 등록된 원격인지 묻는다. 원격 이름에는 "/"가 들어갈 수 있어서
+	// (예: team/upstream) 문자열만 보고 URL이라고 단정하면 멀쩡한 저장소를 건너뛰게 된다.
+	if url, err := r.gitLine(ctx, repo.Root, "config", "--get", "remote."+remote+".url"); err != nil || url == "" {
 		return Upstream{}, ErrNoUpstream
 	}
 
@@ -129,14 +134,63 @@ func (r Runner) Upstream(ctx context.Context, repo Repo) (Upstream, error) {
 		return Upstream{}, ErrNoUpstream
 	}
 
-	// 추적 참조의 이름을 규칙으로 지어내지 않고 git에게 묻는다. fetch 참조 사양을 손댄 저장소에서는
-	// refs/remotes/<remote>/<branch>라는 통념이 맞지 않을 수 있기 때문이다.
-	trackingRef, err := r.gitLine(ctx, repo.Root, "rev-parse", "--symbolic-full-name", branch+"@{upstream}")
-	if err != nil || trackingRef == "" {
+	trackingRef := r.trackingRef(ctx, repo, branch, remote, remoteRef)
+	if trackingRef == "" {
 		return Upstream{}, ErrNoUpstream
 	}
 
 	return Upstream{Branch: branch, Remote: remote, RemoteRef: remoteRef, TrackingRef: trackingRef}, nil
+}
+
+// trackingRef는 이 브랜치가 견주는 원격 추적 참조의 전체 이름을 알아낸다.
+//
+// 세 단계로 찾는다. 우선 git에게 직접 묻는다. 다만 이 물음은 참조가 이미 로컬에 있을 때만 답하므로,
+// 아직 한 번도 가져온 적 없는 브랜치에서는 실패한다. 그 경우가 바로 이 플러그인이 도와야 할
+// 상황이라서, 여기서 포기하면 정작 필요한 자리에서 아무 일도 하지 않게 된다.
+// 그래서 다음으로 원격에 설정된 fetch 참조 사양을 보고 대응되는 이름을 계산하고,
+// 그것도 없으면 관례대로 refs/remotes/<원격>/<브랜치>를 쓴다.
+func (r Runner) trackingRef(ctx context.Context, repo Repo, branch, remote, remoteRef string) string {
+	if ref, err := r.gitLine(ctx, repo.Root, "rev-parse", "--symbolic-full-name", branch+"@{upstream}"); err == nil && ref != "" {
+		return ref
+	}
+	if ref := r.trackingRefFromRefspec(ctx, repo, remote, remoteRef); ref != "" {
+		return ref
+	}
+	return "refs/remotes/" + remote + "/" + strings.TrimPrefix(remoteRef, "refs/heads/")
+}
+
+// trackingRefFromRefspec은 원격에 설정된 fetch 참조 사양에 remoteRef를 대입해 목적지 이름을 만든다.
+// 참조 사양을 손댄 저장소에서는 refs/remotes/<원격>/<브랜치>라는 통념이 맞지 않기 때문에,
+// 관례로 넘어가기 전에 실제 설정을 먼저 본다.
+func (r Runner) trackingRefFromRefspec(ctx context.Context, repo Repo, remote, remoteRef string) string {
+	out, err := r.git(ctx, repo.Root, localTimeout, "config", "--get-all", "remote."+remote+".fetch")
+	if err != nil {
+		return ""
+	}
+	for _, spec := range splitLines(out) {
+		spec = strings.TrimPrefix(spec, "+")
+		source, destination, found := strings.Cut(spec, ":")
+		if !found || source == "" || destination == "" {
+			continue
+		}
+		// 별표가 없는 사양은 한 참조만 짝짓는다.
+		if !strings.Contains(source, "*") {
+			if source == remoteRef {
+				return destination
+			}
+			continue
+		}
+		prefix, suffix, _ := strings.Cut(source, "*")
+		if !strings.HasPrefix(remoteRef, prefix) || !strings.HasSuffix(remoteRef, suffix) {
+			continue
+		}
+		middle := remoteRef[len(prefix) : len(remoteRef)-len(suffix)]
+		if !strings.Contains(destination, "*") {
+			continue
+		}
+		return strings.Replace(destination, "*", middle, 1)
+	}
+	return ""
 }
 
 // CountsFor는 HEAD와 추적 참조 사이의 앞뒤 커밋 수를 센다.
@@ -166,14 +220,38 @@ func (r Runner) CountsFor(ctx context.Context, repo Repo, up Upstream) (Counts, 
 // 좁게 가져오는 것이 핵심이다. 태그와 다른 브랜치까지 끌어오면 이 주기로 반복하기에는 비용이 크고,
 // prune은 남의 작업 중인 참조를 지울 수 있다. 자동 정리(gc)도 꺼 둔다. 주기적으로 도는 작업이
 // 사용자가 모르는 사이에 무거운 정리 작업을 반복해서 깨우면 곤란하기 때문이다.
+//
+// --no-write-fetch-head는 사용자의 작업을 건드리지 않기 위한 것이다. 이것이 없으면 배경에서 도는
+// 이 fetch가 FETCH_HEAD를 다시 쓰는데, 사용자가 방금 손으로 fetch한 뒤 `git merge FETCH_HEAD`를
+// 하려던 참이었다면 엉뚱한 커밋을 병합하게 된다.
+//
+// 참조 사양 앞의 "+"는 강제 갱신을 뜻한다. 원격 추적 참조는 원격을 그대로 비추는 자리이고 git 자신의
+// 기본 참조 사양도 강제이므로, 되감기 push가 일어난 뒤에도 숫자가 사실과 어긋나지 않게 하려면 필요하다.
 func (r Runner) Fetch(ctx context.Context, repo Repo, up Upstream) error {
 	refspec := "+" + up.RemoteRef + ":" + up.TrackingRef
-	_, err := r.git(ctx, repo.Root, r.fetchTimeout(),
+	_, err := r.gitWithEnv(ctx, repo.Root, r.fetchTimeout(), r.fetchEnv(ctx, repo),
 		"-c", "gc.auto=0",
-		"fetch", "--quiet", "--no-tags", "--no-prune", "--no-prune-tags", "--no-recurse-submodules",
+		"fetch", "--quiet", "--no-tags", "--no-prune", "--no-prune-tags",
+		"--no-recurse-submodules", "--no-write-fetch-head",
 		"--", up.Remote, refspec,
 	)
 	return err
+}
+
+// fetchEnv는 fetch에 쓸 환경을 만든다.
+//
+// ssh 명령을 우리가 정하는 것은 사용자가 아무 설정도 해 두지 않았을 때뿐이다. 전용 키나 ProxyCommand를
+// 쓰려고 GIT_SSH_COMMAND나 core.sshCommand를 지정해 둔 사람의 설정을 덮으면 fetch 자체가 실패한다.
+// 사용자의 설정을 그대로 두면 암호 입력을 기다리며 멈출 수는 있지만, 그것은 제한 시간이 걷어 낸다.
+func (r Runner) fetchEnv(ctx context.Context, repo Repo) []string {
+	env := nonInteractiveEnv()
+	if os.Getenv("GIT_SSH_COMMAND") != "" {
+		return env
+	}
+	if configured, err := r.gitLine(ctx, repo.Root, "config", "--get", "core.sshCommand"); err == nil && configured != "" {
+		return env
+	}
+	return append(env, "GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=10")
 }
 
 func (r Runner) fetchTimeout() time.Duration {
@@ -210,12 +288,17 @@ func subcommand(args []string) string {
 
 // git은 명령 하나를 실행하고 표준 출력을 돌려준다.
 func (r Runner) git(ctx context.Context, dir string, timeout time.Duration, args ...string) ([]byte, error) {
+	return r.gitWithEnv(ctx, dir, timeout, nonInteractiveEnv(), args...)
+}
+
+// gitWithEnv는 환경을 지정해 git 명령을 실행한다.
+func (r Runner) gitWithEnv(ctx context.Context, dir string, timeout time.Duration, env []string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Env = nonInteractiveEnv()
+	cmd.Env = env
 	cmd.Stdin = nil
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -245,20 +328,16 @@ func (r Runner) git(ctx context.Context, dir string, timeout time.Duration, args
 
 // nonInteractiveEnv는 git이 사람에게 무언가를 물어보다 멈추는 일이 없도록 환경을 다듬는다.
 // 배경에서 도는 작업이 자격 증명 프롬프트를 띄우면 제한 시간까지 그대로 매달려 있게 된다.
+//
+// ssh 설정은 여기서 건드리지 않는다. 사용자가 정해 둔 것을 덮을 위험이 있어 fetchEnv가 따로 판단한다.
 func nonInteractiveEnv() []string {
-	env := os.Environ()
-	env = append(env,
+	return append(os.Environ(),
 		"GIT_TERMINAL_PROMPT=0",
-		// 인증서나 호스트 키 확인으로 멈추지 않도록 ssh도 비대화형으로 돌린다.
-		// 사용자가 이미 GIT_SSH_COMMAND를 정해 두었다면 그쪽이 뒤에 오도록 두어야 하지만,
-		// os.Environ()이 앞에 있으므로 뒤에 붙는 이 값이 이긴다. 배경 작업에서는 그 편이 안전하다.
-		"GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=10",
 		// 대화형 자격 증명 관리자도 막는다.
 		"GCM_INTERACTIVE=never",
 		// 인덱스 같은 부가적인 잠금을 잡지 않아, 사용자가 동시에 쓰는 git과 부딪히지 않는다.
 		"GIT_OPTIONAL_LOCKS=0",
 	)
-	return env
 }
 
 func splitLines(out []byte) []string {
