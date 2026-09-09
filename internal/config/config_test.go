@@ -124,3 +124,41 @@ func write(t *testing.T, dir, body string) {
 		t.Fatal(err)
 	}
 }
+
+// herdr 는 한 요청의 토큰 이름을 통째로 검사해서 하나라도 어긋나면 요청 전체를 거절한다.
+// 그래서 이름 하나를 잘못 적으면 나머지 토큰까지 함께 사라진다. 여기서 걸러 내야 한다.
+func TestInvalidTokenNamesAreDroppedNotSubstituted(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HERDR_PLUGIN_CONFIG_DIR", dir)
+	write(t, dir, `{"behind_token":"뒤처짐","ahead_token":"my.ahead"}`)
+
+	got, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BehindToken != "" || got.AheadToken != "" {
+		t.Fatalf("규칙에 어긋난 이름은 보고하지 않아야 한다: %+v", got)
+	}
+	if got.StaleToken != defaultStaleToken {
+		t.Fatalf("멀쩡한 토큰까지 함께 버리면 안 된다: %q", got.StaleToken)
+	}
+	names := got.InvalidTokenNames()
+	if len(names) != 2 {
+		t.Fatalf("버린 이름을 알려 주어야 한다: %v", names)
+	}
+}
+
+func TestValidTokenName(t *testing.T) {
+	valid := []string{"behind", "ahead", "sync_stale", "a", "A-9_z", "0123456789012345678901234567890a"}
+	for _, name := range valid {
+		if !validTokenName(name) {
+			t.Fatalf("받아들여야 한다: %q", name)
+		}
+	}
+	invalid := []string{"", "뒤처짐", "my.token", "with space", "a/b", "0123456789012345678901234567890ab"}
+	for _, name := range invalid {
+		if validTokenName(name) {
+			t.Fatalf("거절해야 한다: %q", name)
+		}
+	}
+}

@@ -142,7 +142,7 @@ func TestDaemonLockTakeoverAfterStaleHeartbeat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeFileAtomic(store.lockPath(), raw); err != nil {
+	if err := WriteFileAtomic(store.lockPath(), raw); err != nil {
 		t.Fatal(err)
 	}
 
@@ -167,5 +167,113 @@ func TestStopRequestIsConsumedOnce(t *testing.T) {
 	}
 	if store.StopRequested() {
 		t.Fatal("중지 요청은 한 번만 소비되어야 한다")
+	}
+}
+
+// 잠금 파일을 잠깐 읽거나 쓰지 못한 것은 소유권을 잃었다는 뜻이 아니다. 그것을 물러날 이유로 삼으면
+// 윈도우처럼 다른 프로세스가 파일을 열어 둔 동안 쓰기가 막히는 환경에서 데몬이 무작위로 죽는다.
+func TestHeartbeatOnlyReportsLossOfOwnership(t *testing.T) {
+	store := Store{Dir: t.TempDir()}
+	if err := store.AcquireDaemonLock(time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if !store.Heartbeat() {
+		t.Fatal("우리가 쥔 잠금에서는 참이어야 한다")
+	}
+
+	// 파일이 사라진 경우: 다시 세워 두고 계속 돈다.
+	if err := os.Remove(store.lockPath()); err != nil {
+		t.Fatal(err)
+	}
+	if !store.Heartbeat() {
+		t.Fatal("잠금이 사라진 것은 소유권 상실이 아니다")
+	}
+	if !store.DaemonAlive(time.Minute) {
+		t.Fatal("사라진 잠금을 다시 세워야 한다")
+	}
+
+	// 내용이 깨진 경우: 판단 근거가 없으므로 계속 돈다.
+	if err := os.WriteFile(store.lockPath(), []byte("이건 JSON이 아니다"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !store.Heartbeat() {
+		t.Fatal("읽을 수 없는 잠금은 소유권 상실이 아니다")
+	}
+
+	// 주인이 바뀐 경우에만 물러난다.
+	raw, err := encodeLock(daemonLock{PID: os.Getpid() + 1, StartedUnix: 1, HeartbeatUnix: time.Now().Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.lockPath(), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if store.Heartbeat() {
+		t.Fatal("주인이 바뀌었으면 물러나야 한다")
+	}
+}
+
+// 하트비트가 파일을 갈아치우면, 그 사이 넘겨받기가 끝났을 때 새 주인의 잠금을 옛 주인 것으로 되돌린다.
+// 제자리에 같은 길이로 쓰면 그 일이 생기지 않고, 반쯤 쓰인 파일이 읽히는 구간도 없다.
+func TestHeartbeatWritesInPlaceWithFixedSize(t *testing.T) {
+	store := Store{Dir: t.TempDir()}
+	if err := store.AcquireDaemonLock(time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(store.lockPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Size() != lockRecordSize {
+		t.Fatalf("잠금 파일은 정해진 길이여야 한다: %d", before.Size())
+	}
+	if !store.Heartbeat() {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(store.lockPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Size() != lockRecordSize {
+		t.Fatalf("갱신 뒤에도 길이가 같아야 한다: %d", after.Size())
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("갱신은 같은 파일에 제자리로 이루어져야 한다")
+	}
+}
+
+// herdr 세션마다 서버가 따로이므로 데몬도 따로 떠야 한다. 잠금을 나눠 쓰면 먼저 뜬 데몬이
+// 다른 세션의 데몬까지 막아, 그 세션에는 영영 토큰이 오지 않는다.
+func TestDaemonLockIsScopedToTheServer(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HERDR_PLUGIN_STATE_DIR", root)
+
+	t.Setenv("HERDR_SOCKET_PATH", "/tmp/session-one.sock")
+	first := New()
+	t.Setenv("HERDR_SOCKET_PATH", "/tmp/session-two.sock")
+	second := New()
+
+	if first.Dir == second.Dir {
+		t.Fatalf("서버가 다르면 잠금 자리도 달라야 한다: %q", first.Dir)
+	}
+	if first.Root != second.Root {
+		t.Fatalf("fetch 기록은 나눠 써야 한다: %q != %q", first.Root, second.Root)
+	}
+	if err := first.AcquireDaemonLock(time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.AcquireDaemonLock(time.Minute); err != nil {
+		t.Fatalf("다른 세션의 데몬은 막히지 않아야 한다: %v", err)
+	}
+}
+
+// 같은 서버라면 어디서 부르든 같은 자리를 봐야 한다. 그러지 않으면 셸에서 부른 명령이
+// herdr 가 띄운 데몬과 다른 잠금을 보고 두 번째 데몬을 띄운다.
+func TestSameServerResolvesToTheSameDir(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HERDR_PLUGIN_STATE_DIR", root)
+	t.Setenv("HERDR_SOCKET_PATH", "/tmp/session-one.sock")
+	if New().Dir != New().Dir {
+		t.Fatal("같은 서버는 같은 자리를 가리켜야 한다")
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -89,16 +90,45 @@ func (r Runner) Discover(ctx context.Context, dir string) (Repo, error) {
 		return Repo{}, ErrNotRepository
 	}
 	// 한 번의 호출로 작업 트리 최상위와 공용 참조 디렉터리를 모두 받는다.
-	// --path-format=absolute가 없으면 공용 디렉터리가 상대 경로로 나올 수 있어, 중복 제거의 열쇠로 쓸 수 없다.
-	out, err := r.git(ctx, dir, localTimeout, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir")
+	//
+	// --path-format=absolute를 쓰면 간단하지만 그 옵션은 git 2.31에서 생겼다. 우분투 20.04나
+	// 데비안 11처럼 오래 쓰이는 배포판은 그보다 낮은 git을 싣고 있고, rev-parse는 모르는 옵션을
+	// 오류로 만들지 않고 그대로 되뱉기 때문에 그런 환경에서는 이상한 첫 줄이 섞여 들어온다.
+	// 그러면 저장소를 못 찾은 것으로 조용히 넘어가, 플러그인이 아무 일도 하지 않는 이유를
+	// 어디에서도 알 수 없게 된다. 그래서 옵션을 쓰지 않고, 상대 경로는 여기서 절대 경로로 맞춘다.
+	out, err := r.git(ctx, dir, localTimeout, "rev-parse", "--show-toplevel", "--git-common-dir")
 	if err != nil {
 		return Repo{}, ErrNotRepository
 	}
 	lines := splitLines(out)
-	if len(lines) < 2 || lines[0] == "" || lines[1] == "" {
+	// 줄 수를 정확히 둘로 못 박아, 옛 git이 옵션을 되뱉은 경우를 걸러 낸다.
+	if len(lines) != 2 || lines[0] == "" || lines[1] == "" {
 		return Repo{}, ErrNotRepository
 	}
-	return Repo{Root: lines[0], CommonDir: lines[1]}, nil
+	// --git-common-dir는 git을 실행한 자리를 기준으로 한 상대 경로로 나올 수 있다.
+	// 중복 제거의 열쇠로 쓰려면 절대 경로여야 한다.
+	common := lines[1]
+	if !filepath.IsAbs(common) {
+		base := dir
+		if abs, err := filepath.Abs(dir); err == nil {
+			base = abs
+		}
+		common = filepath.Join(base, common)
+	}
+	return Repo{Root: lines[0], CommonDir: canonical(common)}, nil
+}
+
+// canonical은 같은 자리를 가리키는 경로를 하나의 문자열로 모은다.
+//
+// 이것이 필요한 이유는 중복 제거 때문이다. 본 저장소에서는 git이 공용 디렉터리를 상대 경로로
+// 답하고(그래서 우리가 실행 위치에 붙인다) 연결된 worktree에서는 이미 풀어 놓은 절대 경로로
+// 답하는데, 그 둘이 심볼릭 링크를 사이에 두면 다른 문자열이 된다. macOS의 임시 디렉터리처럼
+// /var가 /private/var를 가리키는 자리가 흔하다. 문자열이 갈리면 같은 저장소를 두 번 가져간다.
+func canonical(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return filepath.Clean(path)
 }
 
 // Upstream은 현재 브랜치가 따라가는 원격 브랜치를 알아낸다.

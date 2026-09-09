@@ -18,7 +18,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"herdr-pull-status/internal/config"
 	"herdr-pull-status/internal/daemon"
@@ -173,10 +172,13 @@ func runStatus() int {
 		BehindToken  string `json:"behind_token"`
 		AheadToken   string `json:"ahead_token"`
 		StaleToken   string `json:"stale_token"`
+		// InvalidTokens는 설정에 적혔지만 herdr 규칙에 맞지 않아 버린 이름들이다.
+		// 사이드바에 아무것도 뜨지 않을 때 여기부터 보면 된다.
+		InvalidTokens []string `json:"invalid_token_names,omitempty"`
 	}
 	out := report{
 		Version:      version,
-		DaemonAlive:  store.DaemonAlive(90 * time.Second),
+		DaemonAlive:  store.DaemonAlive(daemon.LockStaleAfter),
 		StateDir:     store.Dir,
 		LogPath:      store.LogPath(),
 		ConfigDir:    config.Dir(),
@@ -188,6 +190,8 @@ func runStatus() int {
 		BehindToken:  cfg.BehindToken,
 		AheadToken:   cfg.AheadToken,
 		StaleToken:   cfg.StaleToken,
+
+		InvalidTokens: cfg.InvalidTokenNames(),
 	}
 	if cfgErr != nil {
 		out.ConfigError = cfgErr.Error()
@@ -202,7 +206,7 @@ func runStatus() int {
 }
 
 func alreadyRunning() bool {
-	return state.New().DaemonAlive(90 * time.Second)
+	return state.New().DaemonAlive(daemon.LockStaleAfter)
 }
 
 func newLogger(w io.Writer) *slog.Logger {

@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"herdr-pull-status/internal/herdrpaths"
 )
 
 // FileName은 설정 디렉터리 안에서 찾는 파일 이름이다.
@@ -61,6 +63,9 @@ type Resolved struct {
 	BehindPrefix string
 	AheadPrefix  string
 	StaleLabel   string
+
+	// invalidTokens는 설정에 적혔지만 herdr가 받아들이지 않아 버린 이름들이다.
+	invalidTokens []string
 }
 
 // 기본값. 60초 주기와 120초 스로틀은 사람이 pull을 잊고 지나칠 만한 시간보다 짧으면서,
@@ -93,13 +98,38 @@ const (
 	maxStaleAfter   = 24 * time.Hour
 )
 
-// Dir는 설정 디렉터리를 돌려준다. herdr가 HERDR_PLUGIN_CONFIG_DIR로 알려 주며,
-// 플러그인 밖에서 직접 실행하는 경우를 위해 플러그인 루트를 대안으로 쓴다.
+// Dir는 설정 디렉터리를 돌려준다.
+//
+// herdr가 띄운 명령에는 HERDR_PLUGIN_CONFIG_DIR가 들어 있다. 사람이 셸에서 직접 부를 때는 그것이
+// 없는데, 그때 herdr와 다른 자리를 보면 사용자가 적어 둔 설정이 통째로 무시된다. 그래서 herdr와
+// 같은 규칙으로 계산한다.
 func Dir() string {
-	if dir := os.Getenv("HERDR_PLUGIN_CONFIG_DIR"); dir != "" {
-		return dir
+	return herdrpaths.ConfigDir()
+}
+
+// validTokenName은 herdr가 받아들이는 토큰 이름의 규칙이다(^[A-Za-z0-9_-]{1,32}$).
+//
+// herdr는 한 요청에 담긴 토큰 이름을 통째로 검사해서 하나라도 어긋나면 요청 전체를 거절한다.
+// 이름 하나를 잘못 적으면 나머지 토큰까지 함께 사라지므로, 여기서 걸러 내고 그 토큰만 쉬게 한다.
+func validTokenName(name string) bool {
+	if len(name) == 0 || len(name) > 32 {
+		return false
 	}
-	return os.Getenv("HERDR_PLUGIN_ROOT")
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '_', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// InvalidTokenNames는 설정에 적힌 토큰 이름 가운데 herdr가 받아들이지 않는 것들을 돌려준다.
+// status 출력과 로그로 드러내, 아무것도 보이지 않는 이유를 사용자가 알 수 있게 한다.
+func (r Resolved) InvalidTokenNames() []string {
+	return r.invalidTokens
 }
 
 // Load는 설정을 읽어 기본값을 채운 결과를 돌려준다.
@@ -124,19 +154,32 @@ func Load() (Resolved, error) {
 }
 
 func resolve(c Config) Resolved {
-	return Resolved{
+	var invalid []string
+	// 이름이 규칙에 어긋나면 그 토큰만 쉬게 한다(빈 이름 = 보고하지 않음).
+	// 기본값으로 되돌리지 않는 이유는, 사용자가 의도한 이름과 다른 이름이 사이드바에 나타나면
+	// 설정이 먹은 것처럼 보여 문제를 더 감추기 때문이다.
+	check := func(name string) string {
+		if name == "" || validTokenName(name) {
+			return name
+		}
+		invalid = append(invalid, name)
+		return ""
+	}
+	resolved := Resolved{
 		Enabled:      boolOr(c.Enabled, true),
 		Interval:     clampSeconds(c.IntervalSeconds, defaultInterval, minInterval, maxInterval),
 		Throttle:     clampSeconds(c.ThrottleSeconds, defaultThrottle, minThrottle, maxThrottle),
 		FetchTimeout: clampSeconds(c.FetchTimeoutSeconds, defaultFetchTimeout, minFetchTimeout, maxFetchTimeout),
 		StaleAfter:   clampSeconds(c.StaleAfterSeconds, defaultStaleAfter, minStaleAfter, maxStaleAfter),
-		BehindToken:  stringOr(c.BehindToken, defaultBehindToken),
-		AheadToken:   stringOr(c.AheadToken, defaultAheadToken),
-		StaleToken:   stringOr(c.StaleToken, defaultStaleToken),
+		BehindToken:  check(stringOr(c.BehindToken, defaultBehindToken)),
+		AheadToken:   check(stringOr(c.AheadToken, defaultAheadToken)),
+		StaleToken:   check(stringOr(c.StaleToken, defaultStaleToken)),
 		BehindPrefix: stringOr(c.BehindPrefix, defaultBehindPrefix),
 		AheadPrefix:  stringOr(c.AheadPrefix, defaultAheadPrefix),
 		StaleLabel:   stringOr(c.StaleLabel, defaultStaleLabel),
 	}
+	resolved.invalidTokens = invalid
+	return resolved
 }
 
 // clampSeconds는 0(미지정)이면 기본값을, 그 외에는 상한과 하한 사이로 자른 값을 돌려준다.

@@ -44,7 +44,6 @@ type Pane struct {
 	WorkspaceID string `json:"workspace_id"`
 	TabID       string `json:"tab_id"`
 	// CWD는 페인 셸의 작업 디렉터리, ForegroundCWD는 그 안에서 도는 프로그램의 작업 디렉터리다.
-	// 에이전트가 하위 디렉터리로 들어가 있는 경우가 있어 둘 다 본다.
 	CWD           string `json:"cwd"`
 	ForegroundCWD string `json:"foreground_cwd"`
 }
@@ -55,12 +54,17 @@ type paneListResponse struct {
 	} `json:"result"`
 }
 
-// Dir는 이 페인이 가리키는 디렉터리를 돌려준다. 전경 프로그램의 위치를 우선한다.
+// Dir는 이 페인이 가리키는 디렉터리를 돌려준다.
+//
+// 셸의 작업 디렉터리를 쓴다. herdr가 워크스페이스의 정체를 정할 때 보는 값이 바로 이것이기 때문이다
+// (src/workspace/tab.rs cwd_for_pane). 전경 프로그램의 위치는 herdr가 정체에도 라벨에도 git 상태에도
+// 쓰지 않으므로, 그쪽을 우선하면 사이드바가 그리는 브랜치와 이 플러그인이 세는 숫자가 서로 다른
+// 저장소를 가리킬 수 있다. 그것은 이 플러그인이 막으려던 바로 그 어긋남이다.
 func (p Pane) Dir() string {
-	if p.ForegroundCWD != "" {
-		return p.ForegroundCWD
+	if p.CWD != "" {
+		return p.CWD
 	}
-	return p.CWD
+	return p.ForegroundCWD
 }
 
 // PaneList는 열려 있는 모든 페인을 돌려준다.
@@ -78,6 +82,45 @@ func (c *Client) PaneList(ctx context.Context) ([]Pane, error) {
 		return nil, fmt.Errorf("pane list 응답을 해석하지 못했다: %w", err)
 	}
 	return parsed.Result.Panes, nil
+}
+
+// Workspace는 herdr가 알려 주는 워크스페이스 정보 중 이 플러그인이 쓰는 부분이다.
+type Workspace struct {
+	WorkspaceID string `json:"workspace_id"`
+	Label       string `json:"label"`
+	// Worktree는 이 워크스페이스가 어느 체크아웃에 속하는지 알려 준다. worktree 흐름으로 만든
+	// 워크스페이스에만 들어 있고, 그렇지 않은 저장소에서는 비어 있다.
+	Worktree *Worktree `json:"worktree"`
+}
+
+// Worktree는 워크스페이스가 매인 git 체크아웃이다.
+type Worktree struct {
+	CheckoutPath string `json:"checkout_path"`
+	RepoRoot     string `json:"repo_root"`
+	RepoKey      string `json:"repo_key"`
+	IsLinked     bool   `json:"is_linked_worktree"`
+}
+
+type workspaceListResponse struct {
+	Result struct {
+		Workspaces []Workspace `json:"workspaces"`
+	} `json:"result"`
+}
+
+// WorkspaceList는 열려 있는 워크스페이스를 돌려준다.
+//
+// 페인 목록만으로도 대부분은 알 수 있지만, worktree로 만든 워크스페이스는 herdr가 체크아웃 경로를
+// 따로 기억해 둔다. 그 값은 페인이 어떻게 바뀌든 흔들리지 않으므로, 있을 때는 그것을 먼저 믿는다.
+func (c *Client) WorkspaceList(ctx context.Context) ([]Workspace, error) {
+	out, err := c.run(ctx, "workspace", "list")
+	if err != nil {
+		return nil, err
+	}
+	var parsed workspaceListResponse
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return nil, fmt.Errorf("workspace list 응답을 해석하지 못했다: %w", err)
+	}
+	return parsed.Result.Workspaces, nil
 }
 
 // ReportMetadata는 워크스페이스에 사이드바 토큰을 보고한다.

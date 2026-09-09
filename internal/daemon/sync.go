@@ -69,7 +69,19 @@ func (s *Syncer) Sweep(ctx context.Context, onlyWorkspace string, force bool) er
 	if err != nil {
 		return err
 	}
-	targets := s.resolveTargets(ctx, panes, onlyWorkspace)
+	// worktree 로 만든 워크스페이스는 herdr 가 체크아웃 경로를 따로 기억해 둔다. 실패해도 페인만으로
+	// 진행할 수 있으므로 오류로 만들지 않는다.
+	anchors := map[string]string{}
+	if workspaces, err := s.Herdr.WorkspaceList(ctx); err == nil {
+		for _, ws := range workspaces {
+			if ws.Worktree != nil && ws.Worktree.CheckoutPath != "" {
+				anchors[ws.WorkspaceID] = ws.Worktree.CheckoutPath
+			}
+		}
+	} else {
+		s.Log.Debug("워크스페이스 목록을 읽지 못했다", "error", err)
+	}
+	targets := s.resolveTargets(ctx, panes, anchors, onlyWorkspace)
 	if len(targets) == 0 {
 		return nil
 	}
@@ -78,12 +90,16 @@ func (s *Syncer) Sweep(ctx context.Context, onlyWorkspace string, force bool) er
 	return nil
 }
 
-// resolveTargets는 페인 목록을 워크스페이스별 저장소로 정리한다.
+// resolveTargets는 워크스페이스마다 어느 저장소를 볼지 정한다.
 //
-// 워크스페이스마다 첫 페인의 디렉터리를 쓴다. herdr 자신도 워크스페이스의 정체를 첫 탭의 뿌리
-// 페인으로 정하므로, 같은 기준을 따라야 사이드바에 보이는 브랜치와 이 플러그인이 세는 숫자가
-// 서로 다른 저장소를 가리키는 일이 생기지 않는다.
-func (s *Syncer) resolveTargets(ctx context.Context, panes []herdrcli.Pane, onlyWorkspace string) []target {
+// worktree 로 만든 워크스페이스는 herdr 가 기억해 둔 체크아웃 경로를 쓴다. 그 값은 페인이 어떻게
+// 바뀌어도 흔들리지 않고, 무엇보다 이 플러그인이 존재하는 이유인 들여쓴 worktree 행을 정확히 짚는다.
+//
+// 그 값이 없는 워크스페이스는 첫 페인의 셸 작업 디렉터리를 쓴다. herdr 도 워크스페이스의 정체를
+// 첫 탭의 뿌리 페인에서 얻으므로 보통은 같은 자리를 가리킨다. 다만 사용자가 페인을 맞바꾸면
+// (herdr 는 그때 뿌리 페인을 새로 지정하지 않는다) 목록의 첫 페인이 뿌리 페인과 어긋날 수 있다.
+// 드문 경우라 여기서는 첫 페인을 그대로 쓰되, 그런 한계가 있다는 것은 적어 둔다.
+func (s *Syncer) resolveTargets(ctx context.Context, panes []herdrcli.Pane, anchors map[string]string, onlyWorkspace string) []target {
 	seen := make(map[string]bool, len(panes))
 	var targets []target
 	for _, pane := range panes {
@@ -95,7 +111,11 @@ func (s *Syncer) resolveTargets(ctx context.Context, panes []herdrcli.Pane, only
 		}
 		seen[pane.WorkspaceID] = true
 
-		item := target{WorkspaceID: pane.WorkspaceID, Dir: pane.Dir()}
+		dir := pane.Dir()
+		if anchor := anchors[pane.WorkspaceID]; anchor != "" {
+			dir = anchor
+		}
+		item := target{WorkspaceID: pane.WorkspaceID, Dir: dir}
 		repo, err := s.Git.Discover(ctx, item.Dir)
 		if err != nil {
 			targets = append(targets, item)
@@ -193,7 +213,9 @@ func (s *Syncer) reportAll(ctx context.Context, targets []target) {
 	for _, item := range targets {
 		tokens := s.tokensFor(ctx, item, now)
 		if err := s.Herdr.ReportMetadata(ctx, item.WorkspaceID, Source, tokens, ttl); err != nil {
-			s.Log.Debug("토큰 보고 실패", "workspace", item.WorkspaceID, "error", err)
+			// 기본 로그 수준에서도 보이게 한다. 보고가 거절되면 사이드바에 아무것도 뜨지 않는데,
+			// 그 이유가 어디에도 남지 않으면 사용자는 플러그인이 그냥 안 되는 줄로 안다.
+			s.Log.Warn("토큰 보고 실패", "workspace", item.WorkspaceID, "error", err)
 		}
 	}
 }
