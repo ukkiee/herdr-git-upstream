@@ -248,6 +248,11 @@ tail -f "$(./bin/herdr-git-upstream status | sed -n 's/.*"log_path": "\(.*\)".*/
 가져오되 세 가지를 달리했다. 세 플랫폼을 모두 지원하고, 포커스된 저장소만이 아니라 열려 있는 모든
 워크스페이스를 주기적으로 돌며, 내장 토큰이 지워지는 worktree 행에서도 보이도록 값을 직접 보고한다.
 
+## 문서
+
+- [docs/PLAN.md](docs/PLAN.md) — 무엇을 왜 만드는지, 어떤 순서로 갈지
+- [docs/HERDR.md](docs/HERDR.md) — 설계의 근거가 되는 herdr 동작들. 전부 소스에서 확인했고 출처를 적어 두었다
+
 ## 라이선스
 
 MIT
