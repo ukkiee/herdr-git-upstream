@@ -135,6 +135,34 @@ herdr-file-viewer가 crossterm을 쓴다.
 각 항목은 `platforms`로 플랫폼을 좁힐 수 있다. 액션의 `contexts`는
 `global`, `workspace`, `tab`, `pane`, `selection`이다.
 
+### 액션을 부를 수 있는 통로
+
+**herdr 에는 액션을 골라 실행하는 화면이 없다.** 명령 팔레트도 액션 피커도 소스에 없다.
+`vjeantet/herdr-palette` 라는 플러그인이 따로 있는 것도 그 자리가 비어 있기 때문이다.
+
+**`contexts` 는 아직 쓰이지 않는다.** 매니페스트를 읽어 목록에 담기까지만 하고
+(`src/app/api/plugins/manifest.rs:401`, `mod.rs:762`), 우클릭 메뉴 코드에는 플러그인 처리가 없다.
+나중을 위해 마련해 둔 자리로 보인다.
+
+그래서 실제 통로는 둘뿐이다.
+
+```toml
+# 키 설정. 평소 사용은 이 방법이다.
+[[keys.command]]
+key = "prefix+shift+w"
+type = "plugin_action"
+command = "<plugin-id>.<action-id>"
+description = "..."
+```
+
+```sh
+# CLI. 스크립트나 시험용.
+herdr plugin action invoke <action-id> --plugin <plugin-id>
+```
+
+**키에 묶기 전에는 없는 것과 같다.** 액션만 만들어 두면 사용자가 찾을 방법이 없으므로,
+붙여 넣을 설정을 플러그인이 내놓아야 한다.
+
 ## 메타데이터 토큰
 
 `herdr workspace report-metadata <ws> --source ID --token 이름=값 [--ttl-ms N]`
