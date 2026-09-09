@@ -143,7 +143,11 @@ func (r Runner) Upstream(ctx context.Context, repo Repo) (Upstream, error) {
 	if branch == "" {
 		return Upstream{}, ErrNoUpstream
 	}
+	return r.UpstreamFor(ctx, repo, branch)
+}
 
+// UpstreamFor는 지정한 브랜치가 따라가는 원격 브랜치를 알아낸다.
+func (r Runner) UpstreamFor(ctx context.Context, repo Repo, branch string) (Upstream, error) {
 	remote, err := r.gitLine(ctx, repo.Root, "config", "--get", "branch."+branch+".remote")
 	if err != nil || remote == "" {
 		return Upstream{}, ErrNoUpstream
@@ -243,6 +247,70 @@ func (r Runner) CountsFor(ctx context.Context, repo Repo, up Upstream) (Counts, 
 		return Counts{}, fmt.Errorf("뒤처진 커밋 수를 해석하지 못했다: %w", err)
 	}
 	return Counts{Ahead: ahead, Behind: behind}, nil
+}
+
+// HeadCommit은 지금 체크아웃된 커밋의 전체 해시를 돌려준다.
+func (r Runner) HeadCommit(ctx context.Context, repo Repo) (string, error) {
+	return r.gitLine(ctx, repo.Root, "rev-parse", "HEAD")
+}
+
+// BaseUpstream은 이 worktree가 갈라져 나온 브랜치의 원격 추적 대상을 짐작한다.
+//
+// 새 worktree의 브랜치는 원본 체크아웃의 HEAD에서 방금 만들어졌으므로, 아직 그 기준 커밋에 그대로
+// 머물러 있다. 그래서 같은 커밋을 가리키면서 upstream이 설정된 로컬 브랜치를 찾으면 그것이 기준이다.
+//
+// 후보가 여럿이면 아무것도 고르지 않는다. 어느 쪽이 기준이었는지 알 수 없는데 하나를 골라 작업
+// 트리를 옮기면, 사용자가 의도하지 않은 브랜치 위에서 일하게 된다. 짐작해서 옮기느니 그대로 두는 편이 낫다.
+func (r Runner) BaseUpstream(ctx context.Context, repo Repo, exclude string) (Upstream, error) {
+	head, err := r.HeadCommit(ctx, repo)
+	if err != nil || head == "" {
+		return Upstream{}, ErrNoUpstream
+	}
+	out, err := r.git(ctx, repo.Root, localTimeout,
+		"for-each-ref", "--format=%(objectname)\t%(refname:short)\t%(upstream)", "refs/heads/")
+	if err != nil {
+		return Upstream{}, ErrNoUpstream
+	}
+
+	candidates := map[string]string{} // 추적 참조 -> 로컬 브랜치
+	for _, line := range splitLines(out) {
+		fields := strings.Split(line, "\t")
+		if len(fields) != 3 {
+			continue
+		}
+		commit, branch, tracking := fields[0], fields[1], fields[2]
+		if commit != head || tracking == "" || branch == exclude {
+			continue
+		}
+		candidates[tracking] = branch
+	}
+	if len(candidates) != 1 {
+		return Upstream{}, ErrNoUpstream
+	}
+	for _, branch := range candidates {
+		return r.UpstreamFor(ctx, repo, branch)
+	}
+	return Upstream{}, ErrNoUpstream
+}
+
+// IsClean은 작업 트리에 손댄 것이 없는지 답한다.
+func (r Runner) IsClean(ctx context.Context, repo Repo) (bool, error) {
+	out, err := r.git(ctx, repo.Root, localTimeout, "status", "--porcelain", "--untracked-files=no")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(out)) == "", nil
+}
+
+// FastForward는 현재 브랜치를 추적 참조까지 앞으로만 옮긴다.
+//
+// --ff-only 여야 한다. 이 명령은 사용자가 만들어 둔 것을 절대 버리지 않아야 하는데, 빨리 감기는
+// 정의상 잃을 것이 없는 이동이기 때문이다. 브랜치가 이미 갈라졌다면 명령이 실패하고, 그때는
+// 아무것도 하지 않는 것이 옳은 결과다.
+func (r Runner) FastForward(ctx context.Context, repo Repo, trackingRef string) error {
+	_, err := r.git(ctx, repo.Root, localTimeout,
+		"merge", "--ff-only", "--no-autostash", "--quiet", "--", trackingRef)
+	return err
 }
 
 // Fetch는 현재 브랜치의 원격 추적 참조 하나만 갱신한다.

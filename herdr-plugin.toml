@@ -31,6 +31,13 @@ command = ["./bin/herdr-pull-status", "fetch"]
 on = "pane.focused"
 command = ["./bin/herdr-pull-status", "fetch"]
 
+# herdr는 worktree를 만들 때 fetch를 하지 않고 원본 체크아웃의 HEAD를 기준으로 삼는다.
+# 손에 쥔 브랜치가 뒤처져 있으면 새 worktree도 뒤처진 자리에서 시작하므로, 만들어진 직후에
+# 기준 브랜치를 가져와 빨리 감기로 맞춘다. config.json 의 fresh_worktrees 로 끌 수 있다.
+[[events]]
+on = "worktree.created"
+command = ["./bin/herdr-pull-status", "worktree-created"]
+
 [[actions]]
 id = "refresh"
 title = "Pull Status: 지금 모두 갱신"

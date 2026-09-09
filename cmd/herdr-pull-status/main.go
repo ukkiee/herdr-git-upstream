@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,6 +22,7 @@ import (
 
 	"herdr-pull-status/internal/config"
 	"herdr-pull-status/internal/daemon"
+	"herdr-pull-status/internal/freshen"
 	"herdr-pull-status/internal/state"
 )
 
@@ -32,6 +34,7 @@ const usage = `herdr-pull-status ` + version + `
   herdr-pull-status daemon [--detach|--foreground]   배경 갱신 루프를 띄운다
   herdr-pull-status fetch                            데몬을 깨운다 (herdr 이벤트 훅용)
   herdr-pull-status refresh                          스로틀을 무시하고 전체를 갱신한다
+  herdr-pull-status worktree-created                 새 worktree를 최신 상태로 맞춘다
   herdr-pull-status stop                             데몬을 멈춘다
   herdr-pull-status status                           데몬과 설정 상태를 출력한다
   herdr-pull-status version                          판 번호를 출력한다
@@ -54,6 +57,8 @@ func run(args []string) int {
 		return runFetch()
 	case "refresh":
 		return runRefresh()
+	case "worktree-created":
+		return runWorktreeCreated()
 	case "stop":
 		return runStop()
 	case "status":
@@ -144,6 +149,34 @@ func runRefresh() int {
 	return 0
 }
 
+// runWorktreeCreated는 herdr가 worktree를 막 만들었을 때 부른다.
+//
+// herdr는 원본 체크아웃의 HEAD를 기준으로 worktree를 만들고 fetch는 하지 않는다. 그래서 손에 쥔
+// 브랜치가 뒤처져 있으면 새 worktree도 뒤처진 채로 시작한다. 여기서 한 번 앞으로 감아 준다.
+func runWorktreeCreated() int {
+	log := newLogger(os.Stderr)
+	cfg, err := config.Load()
+	if err != nil {
+		log.Warn("설정을 읽지 못해 기본값으로 진행한다", "error", err)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	result, err := freshen.WorktreeCreated(ctx, cfg, log)
+	switch {
+	case errors.Is(err, freshen.ErrSkipped):
+		return 0
+	case err != nil:
+		// worktree 자체는 멀쩡히 만들어졌다. 최신으로 맞추지 못한 것이 사용자의 작업을 막을 이유는 없다.
+		log.Warn("새 worktree를 최신 상태로 맞추지 못했다", "error", err)
+		return 0
+	case result.Moved:
+		log.Info("새 worktree를 최신 상태로 맞췄다",
+			"path", result.Path, "branch", result.Branch, "base", result.TrackingRef)
+	}
+	return 0
+}
+
 func runStop() int {
 	if err := daemon.Stop(); err != nil {
 		fmt.Fprintf(os.Stderr, "데몬을 멈추지 못했다: %v\n", err)
@@ -158,38 +191,40 @@ func runStatus() int {
 	cfg, cfgErr := config.Load()
 
 	type report struct {
-		Version      string `json:"version"`
-		DaemonAlive  bool   `json:"daemon_alive"`
-		StateDir     string `json:"state_dir"`
-		LogPath      string `json:"log_path"`
-		ConfigDir    string `json:"config_dir"`
-		ConfigError  string `json:"config_error,omitempty"`
-		Enabled      bool   `json:"enabled"`
-		Interval     string `json:"interval"`
-		Throttle     string `json:"throttle"`
-		FetchTimeout string `json:"fetch_timeout"`
-		StaleAfter   string `json:"stale_after"`
-		BehindToken  string `json:"behind_token"`
-		AheadToken   string `json:"ahead_token"`
-		StaleToken   string `json:"stale_token"`
+		Version        string `json:"version"`
+		DaemonAlive    bool   `json:"daemon_alive"`
+		StateDir       string `json:"state_dir"`
+		LogPath        string `json:"log_path"`
+		ConfigDir      string `json:"config_dir"`
+		ConfigError    string `json:"config_error,omitempty"`
+		Enabled        bool   `json:"enabled"`
+		Interval       string `json:"interval"`
+		Throttle       string `json:"throttle"`
+		FetchTimeout   string `json:"fetch_timeout"`
+		StaleAfter     string `json:"stale_after"`
+		BehindToken    string `json:"behind_token"`
+		AheadToken     string `json:"ahead_token"`
+		StaleToken     string `json:"stale_token"`
+		FreshWorktrees bool   `json:"fresh_worktrees"`
 		// InvalidTokens는 설정에 적혔지만 herdr 규칙에 맞지 않아 버린 이름들이다.
 		// 사이드바에 아무것도 뜨지 않을 때 여기부터 보면 된다.
 		InvalidTokens []string `json:"invalid_token_names,omitempty"`
 	}
 	out := report{
-		Version:      version,
-		DaemonAlive:  store.DaemonAlive(daemon.LockStaleAfter),
-		StateDir:     store.Dir,
-		LogPath:      store.LogPath(),
-		ConfigDir:    config.Dir(),
-		Enabled:      cfg.Enabled,
-		Interval:     cfg.Interval.String(),
-		Throttle:     cfg.Throttle.String(),
-		FetchTimeout: cfg.FetchTimeout.String(),
-		StaleAfter:   cfg.StaleAfter.String(),
-		BehindToken:  cfg.BehindToken,
-		AheadToken:   cfg.AheadToken,
-		StaleToken:   cfg.StaleToken,
+		Version:        version,
+		DaemonAlive:    store.DaemonAlive(daemon.LockStaleAfter),
+		StateDir:       store.Dir,
+		LogPath:        store.LogPath(),
+		ConfigDir:      config.Dir(),
+		Enabled:        cfg.Enabled,
+		Interval:       cfg.Interval.String(),
+		Throttle:       cfg.Throttle.String(),
+		FetchTimeout:   cfg.FetchTimeout.String(),
+		StaleAfter:     cfg.StaleAfter.String(),
+		BehindToken:    cfg.BehindToken,
+		AheadToken:     cfg.AheadToken,
+		StaleToken:     cfg.StaleToken,
+		FreshWorktrees: cfg.FreshWorktrees,
 
 		InvalidTokens: cfg.InvalidTokenNames(),
 	}

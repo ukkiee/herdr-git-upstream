@@ -9,5 +9,6 @@
   "behind_prefix": "↓",
   "ahead_prefix": "↑",
   "stale_label": "stale",
-  "enabled": true
+  "enabled": true,
+  "fresh_worktrees": true
 }

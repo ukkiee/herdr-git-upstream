@@ -48,6 +48,9 @@ type Config struct {
 
 	// StaleLabel은 stale 토큰의 값이다.
 	StaleLabel *string `json:"stale_label,omitempty"`
+
+	// FreshWorktrees가 false면 새로 만든 worktree를 최신 상태로 맞추지 않는다.
+	FreshWorktrees *bool `json:"fresh_worktrees,omitempty"`
 }
 
 // Resolved는 기본값이 모두 채워진, 바로 쓸 수 있는 설정이다.
@@ -63,6 +66,8 @@ type Resolved struct {
 	BehindPrefix string
 	AheadPrefix  string
 	StaleLabel   string
+	// FreshWorktrees는 갓 만든 worktree를 원격의 최신 상태로 앞당길지 정한다.
+	FreshWorktrees bool
 
 	// invalidTokens는 설정에 적혔지만 herdr가 받아들이지 않아 버린 이름들이다.
 	invalidTokens []string
@@ -177,6 +182,9 @@ func resolve(c Config) Resolved {
 		BehindPrefix: stringOr(c.BehindPrefix, defaultBehindPrefix),
 		AheadPrefix:  stringOr(c.AheadPrefix, defaultAheadPrefix),
 		StaleLabel:   stringOr(c.StaleLabel, defaultStaleLabel),
+		// 기본으로 켜 둔다. 하는 일이 빨리 감기뿐이라 사용자가 만든 것을 잃을 수 없고,
+		// 낡은 바닥 위에서 새 작업을 시작하는 것이 이 플러그인이 막으려는 바로 그 상황이다.
+		FreshWorktrees: boolOr(c.FreshWorktrees, true),
 	}
 	resolved.invalidTokens = invalid
 	return resolved
