@@ -162,3 +162,79 @@ func TestValidTokenName(t *testing.T) {
 		}
 	}
 }
+
+// gone/merged/catchup 토큰은 아직 보고하지 않지만, setup 이 사이드바 행을 만들려면 이름을 알아야 한다.
+// 기존 토큰과 같은 규칙을 따라야 사용자가 한 가지 방식만 익히면 된다.
+func TestJudgementTokenDefaults(t *testing.T) {
+	t.Setenv("HERDR_PLUGIN_CONFIG_DIR", t.TempDir())
+
+	got, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"gone_token", got.GoneToken, "gone"},
+		{"gone_label", got.GoneLabel, "gone"},
+		{"merged_token", got.MergedToken, "merged"},
+		{"merged_label", got.MergedLabel, "merged"},
+		{"catchup_token", got.CatchupToken, "catchup"},
+		{"catchup_conflict_label", got.CatchupConflictLabel, "conflict"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.got != tc.want {
+				t.Fatalf("%s = %q, 기대값 %q", tc.name, tc.got, tc.want)
+			}
+		})
+	}
+}
+
+func TestJudgementTokensFollowTheSameRules(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HERDR_PLUGIN_CONFIG_DIR", dir)
+	write(t, dir, `{"gone_token":"","merged_token":"병합됨","catchup_token":"cu","catchup_conflict_label":"!"}`)
+
+	got, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GoneToken != "" {
+		t.Fatalf("빈 이름은 보고하지 않음이어야 한다: %q", got.GoneToken)
+	}
+	if got.MergedToken != "" {
+		t.Fatalf("규칙에 어긋난 이름은 버려야 한다: %q", got.MergedToken)
+	}
+	if got.CatchupToken != "cu" || got.CatchupConflictLabel != "!" {
+		t.Fatalf("바꾼 이름과 라벨이 반영되지 않았다: %+v", got)
+	}
+	names := got.InvalidTokenNames()
+	if len(names) != 1 || names[0] != "병합됨" {
+		t.Fatalf("버린 이름을 알려 주어야 한다: %v", names)
+	}
+}
+
+// TokenNames 는 setup 과 status 가 "우리 토큰"을 한 목록으로 다루는 근거다. 빈 이름과 버린 이름은 빠져야 한다.
+func TestTokenNamesListsOnlyReportableNames(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HERDR_PLUGIN_CONFIG_DIR", dir)
+	write(t, dir, `{"ahead_token":"","gone_token":"my.gone","catchup_token":"cu"}`)
+
+	got, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"behind", "merged", "cu", "sync_stale"}
+	names := got.TokenNames()
+	if len(names) != len(want) {
+		t.Fatalf("TokenNames = %v, 기대값 %v", names, want)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("TokenNames = %v, 기대값 %v", names, want)
+		}
+	}
+}

@@ -18,11 +18,16 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"herdr-git-upstream/internal/config"
 	"herdr-git-upstream/internal/daemon"
 	"herdr-git-upstream/internal/freshen"
+	"herdr-git-upstream/internal/herdrconfig"
+	"herdr-git-upstream/internal/herdrpaths"
+	"herdr-git-upstream/internal/setup"
 	"herdr-git-upstream/internal/state"
 )
 
@@ -37,6 +42,7 @@ const usage = `herdr-git-upstream ` + version + `
   herdr-git-upstream worktree-created                 새 worktree를 최신 상태로 맞춘다
   herdr-git-upstream stop                             데몬을 멈춘다
   herdr-git-upstream status                           데몬과 설정 상태를 출력한다
+  herdr-git-upstream setup                            붙여 넣을 herdr 설정을 출력한다
   herdr-git-upstream version                          판 번호를 출력한다
 `
 
@@ -63,6 +69,8 @@ func run(args []string) int {
 		return runStop()
 	case "status":
 		return runStatus()
+	case "setup":
+		return runSetup()
 	case "version", "--version", "-v":
 		fmt.Println(version)
 		return 0
@@ -186,9 +194,46 @@ func runStop() int {
 	return 0
 }
 
+// runSetup은 사용자가 herdr 설정에 붙여 넣을 조각을 출력한다.
+//
+// 파일은 절대 고치지 않는다. 사이드바 행과 키는 herdr의 config.toml에 들어가야 하는데, 그 파일은
+// 사용자의 것이다. 이미 들어 있는 것은 빼고 남은 것만 보여 주어 붙여 넣기가 한 번으로 끝나게 한다.
+func runSetup() int {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "설정을 읽지 못해 기본 토큰 이름으로 진행한다: %v\n", err)
+	}
+	path := herdrpaths.ConfigFile()
+	scan, err := herdrconfig.Load()
+	if err != nil {
+		// 파일이 없는 것은 오류가 아니다. 여기 오는 것은 권한 같은 문제인데, 그래도 붙여 넣을 본문은
+		// 만들 수 있다. 아무것도 없는 것으로 보고 전체를 보여 준다.
+		fmt.Fprintf(os.Stderr, "%s 를 읽지 못해 아무것도 없는 것으로 보고 진행한다: %v\n", path, err)
+	}
+	fmt.Print(setup.Render(cfg, scan, abbreviateHome(path)))
+	return 0
+}
+
+// abbreviateHome은 홈 디렉터리 아래의 경로를 ~ 로 줄인다. 안내 첫 줄에 보여 줄 때만 쓴다.
+//
+// 홈은 정리한 뒤 견준다. os.UserHomeDir는 HOME을 그대로 돌려주므로 값이 구분자로 끝나면
+// `home + 구분자` 접두사가 구분자 둘로 끝나, herdrpaths가 filepath.Join으로 정리해 둔 경로와 맞지 않는다.
+func abbreviateHome(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	home = filepath.Clean(home)
+	if rest, ok := strings.CutPrefix(path, home+string(filepath.Separator)); ok {
+		return "~" + string(filepath.Separator) + rest
+	}
+	return path
+}
+
 func runStatus() int {
 	store := state.New()
 	cfg, cfgErr := config.Load()
+	scan, scanErr := herdrconfig.Load()
 
 	type report struct {
 		Version        string `json:"version"`
@@ -204,11 +249,20 @@ func runStatus() int {
 		StaleAfter     string `json:"stale_after"`
 		BehindToken    string `json:"behind_token"`
 		AheadToken     string `json:"ahead_token"`
+		GoneToken      string `json:"gone_token"`
+		MergedToken    string `json:"merged_token"`
+		CatchupToken   string `json:"catchup_token"`
 		StaleToken     string `json:"stale_token"`
 		FreshWorktrees bool   `json:"fresh_worktrees"`
 		// InvalidTokens는 설정에 적혔지만 herdr 규칙에 맞지 않아 버린 이름들이다.
 		// 사이드바에 아무것도 뜨지 않을 때 여기부터 보면 된다.
 		InvalidTokens []string `json:"invalid_token_names,omitempty"`
+		// ConfigTOML은 herdr 자신의 설정 파일이다. 아래 두 값은 그 파일을 훑어 얻는다.
+		// 파일이 없으면 둘 다 false 이며, 그때는 setup 이 내놓는 것을 붙여 넣으면 된다.
+		ConfigTOML        string `json:"config_toml"`
+		ConfigTOMLError   string `json:"config_toml_error,omitempty"`
+		SidebarConfigured bool   `json:"sidebar_configured"`
+		KeyBound          bool   `json:"key_bound"`
 	}
 	out := report{
 		Version:        version,
@@ -223,13 +277,23 @@ func runStatus() int {
 		StaleAfter:     cfg.StaleAfter.String(),
 		BehindToken:    cfg.BehindToken,
 		AheadToken:     cfg.AheadToken,
+		GoneToken:      cfg.GoneToken,
+		MergedToken:    cfg.MergedToken,
+		CatchupToken:   cfg.CatchupToken,
 		StaleToken:     cfg.StaleToken,
 		FreshWorktrees: cfg.FreshWorktrees,
 
 		InvalidTokens: cfg.InvalidTokenNames(),
+
+		ConfigTOML:        herdrpaths.ConfigFile(),
+		SidebarConfigured: setup.SidebarConfigured(cfg, scan),
+		KeyBound:          setup.KeyBound(scan),
 	}
 	if cfgErr != nil {
 		out.ConfigError = cfgErr.Error()
+	}
+	if scanErr != nil {
+		out.ConfigTOMLError = scanErr.Error()
 	}
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")

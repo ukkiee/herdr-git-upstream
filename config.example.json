@@ -9,6 +9,12 @@
   "behind_prefix": "↓",
   "ahead_prefix": "↑",
   "stale_label": "stale",
+  "gone_token": "gone",
+  "gone_label": "gone",
+  "merged_token": "merged",
+  "merged_label": "merged",
+  "catchup_token": "catchup",
+  "catchup_conflict_label": "conflict",
   "enabled": true,
   "fresh_worktrees": true
 }

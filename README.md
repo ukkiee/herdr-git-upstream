@@ -62,7 +62,17 @@ herdr plugin link /Users/ukyi/personal/herdr-git-upstream
 ## 사이드바 설정
 
 **이 설정을 넣기 전에는 아무것도 보이지 않는다.** herdr는 사이드바 설정이 요청한 토큰만 그린다.
-`~/.config/herdr/config.toml`에 다음을 넣는다.
+
+붙여 넣을 내용은 `setup` 명령이 대신 만들어 준다. `config.toml`을 훑어 이미 들어 있는 것은 빼고
+남은 것만 보여 주며, 토큰 이름을 바꿨다면 바꾼 이름으로 만든다. **파일은 고치지 않는다.** 출력을
+붙여 넣는 것은 사람이 한다. 사이드바 토큰과 worktrees 키가 모두 들어 있으면 "설정이 모두 들어
+있습니다."라고만 답한다. 생성 팝업 키는 옵트인이라, 빠져 있어도 모두 들어 있는 것으로 본다.
+
+```sh
+./bin/herdr-git-upstream setup
+```
+
+손으로 넣는다면 `~/.config/herdr/config.toml`에 다음을 넣는다.
 
 ```toml
 [ui.sidebar.spaces]
@@ -120,6 +130,12 @@ HEAD가 분리되어 있거나, upstream이 설정되지 않은 워크스페이�
   "behind_prefix": "↓",
   "ahead_prefix": "↑",
   "stale_label": "stale",
+  "gone_token": "gone",
+  "gone_label": "gone",
+  "merged_token": "merged",
+  "merged_label": "merged",
+  "catchup_token": "catchup",
+  "catchup_conflict_label": "conflict",
   "fresh_worktrees": true,
   "enabled": true
 }
@@ -131,8 +147,17 @@ HEAD가 분리되어 있거나, upstream이 설정되지 않은 워크스페이�
 | `throttle_seconds` | 120 | 같은 저장소를 다시 가져오기까지의 최소 간격 |
 | `fetch_timeout_seconds` | 20 | 저장소 하나당 fetch 제한 시간 |
 | `stale_after_seconds` | 900 | 실패가 이만큼 이어지면 `stale`을 띄운다 |
+| `gone_token` | `gone` | upstream이 원격에서 사라졌을 때 보고할 토큰 이름 |
+| `gone_label` | `gone` | 그때 채우는 값 |
+| `merged_token` | `merged` | HEAD가 이미 어느 원격 브랜치에 들어가 있을 때 보고할 토큰 이름 |
+| `merged_label` | `merged` | 그때 채우는 값 |
+| `catchup_token` | `catchup` | 따라잡을 때 충돌하는지 알릴 토큰 이름 |
+| `catchup_conflict_label` | `conflict` | 충돌할 때만 채우는 값. 깨끗하면 빈 값이다 |
 | `fresh_worktrees` | true | 새로 만든 worktree를 원격의 최신 상태로 맞춘다 |
 | `enabled` | true | false로 두면 이 플러그인이 올린 토큰을 지우고 쉰다 |
+
+`gone`, `merged`, `catchup` 토큰은 아직 보고하지 않는다. 판정 기능이 붙기 전에 `setup`이 사이드바
+행을 만들 때 이름을 알아야 해서 설정 자리를 먼저 두었다.
 
 토큰 이름을 빈 문자열로 두면 그 토큰은 보고하지 않는다. 설정은 매 회차마다 다시 읽으므로
 herdr를 재시작하지 않아도 주기를 바꿀 수 있다.
@@ -208,6 +233,7 @@ herdr plugin action invoke stop    --plugin git-upstream   # 데몬 중지
 실행 파일을 직접 부를 수도 있다.
 
 ```sh
+./bin/herdr-git-upstream setup     # config.toml 에 붙여 넣을 설정을 출력 (파일은 고치지 않는다)
 ./bin/herdr-git-upstream status    # 데몬과 설정 상태를 JSON 으로 출력
 ./bin/herdr-git-upstream refresh
 ```
@@ -224,7 +250,8 @@ tail -f "$(./bin/herdr-git-upstream status | sed -n 's/.*"log_path": "\(.*\)".*/
 상세 로그가 필요하면 `HERDR_GIT_UPSTREAM_DEBUG=1`을 준 채로 데몬을 다시 띄운다.
 
 아무것도 보이지 않는다면 대개 둘 중 하나다. 사이드바 `rows`에 토큰을 넣지 않았거나,
-사이드바를 접어 두었거나(접힌 상태에서는 herdr가 번호와 상태 점만 그린다).
+사이드바를 접어 두었거나(접힌 상태에서는 herdr가 번호와 상태 점만 그린다). 앞의 경우는 `status`의
+`sidebar_configured`가 false로 나오며, `setup`이 붙여 넣을 것을 만들어 준다.
 
 ## 알아둘 점
 

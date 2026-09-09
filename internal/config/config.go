@@ -49,6 +49,18 @@ type Config struct {
 	// StaleLabel은 stale 토큰의 값이다.
 	StaleLabel *string `json:"stale_label,omitempty"`
 
+	// GoneToken과 MergedToken은 브랜치가 원격에서 끝난 작업인지 알리는 토큰 이름이고,
+	// GoneLabel과 MergedLabel은 해당할 때 채우는 값이다.
+	GoneToken   *string `json:"gone_token,omitempty"`
+	GoneLabel   *string `json:"gone_label,omitempty"`
+	MergedToken *string `json:"merged_token,omitempty"`
+	MergedLabel *string `json:"merged_label,omitempty"`
+
+	// CatchupToken은 따라잡을 때 충돌하는지 미리 알리는 토큰 이름이고,
+	// CatchupConflictLabel은 충돌할 때만 채우는 값이다. 깨끗하면 빈 값이다.
+	CatchupToken         *string `json:"catchup_token,omitempty"`
+	CatchupConflictLabel *string `json:"catchup_conflict_label,omitempty"`
+
 	// FreshWorktrees가 false면 새로 만든 worktree를 최신 상태로 맞추지 않는다.
 	FreshWorktrees *bool `json:"fresh_worktrees,omitempty"`
 }
@@ -66,6 +78,14 @@ type Resolved struct {
 	BehindPrefix string
 	AheadPrefix  string
 	StaleLabel   string
+	// GoneToken, MergedToken, CatchupToken은 아직 보고하지 않는 토큰이다. setup이 사이드바 행을
+	// 만들 때 이름을 알아야 하므로 먼저 설정에 자리를 둔다. 보고는 판정 기능과 함께 시작된다.
+	GoneToken            string
+	GoneLabel            string
+	MergedToken          string
+	MergedLabel          string
+	CatchupToken         string
+	CatchupConflictLabel string
 	// FreshWorktrees는 갓 만든 worktree를 원격의 최신 상태로 앞당길지 정한다.
 	FreshWorktrees bool
 
@@ -87,6 +107,13 @@ const (
 	defaultBehindPrefix = "↓"
 	defaultAheadPrefix  = "↑"
 	defaultStaleLabel   = "stale"
+
+	defaultGoneToken            = "gone"
+	defaultGoneLabel            = "gone"
+	defaultMergedToken          = "merged"
+	defaultMergedLabel          = "merged"
+	defaultCatchupToken         = "catchup"
+	defaultCatchupConflictLabel = "conflict"
 )
 
 // 사람이 실수로 극단적인 값을 넣었을 때를 위한 하한과 상한이다.
@@ -137,6 +164,21 @@ func (r Resolved) InvalidTokenNames() []string {
 	return r.invalidTokens
 }
 
+// TokenNames는 보고할 수 있는 토큰 이름의 집합이다. 빈 이름(보고하지 않음)과 규칙에 어긋나 버린
+// 이름은 이미 빠져 있다. status와 setup이 "우리 토큰이 하나라도 설정에 있는가"를 물을 때 쓴다.
+// 사이드바 행의 순서와 모양은 여기가 아니라 setup이 한 곳에서 정한다.
+func (r Resolved) TokenNames() []string {
+	var names []string
+	for _, name := range []string{
+		r.BehindToken, r.AheadToken, r.GoneToken, r.MergedToken, r.CatchupToken, r.StaleToken,
+	} {
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 // Load는 설정을 읽어 기본값을 채운 결과를 돌려준다.
 // 파일이 없으면 오류가 아니며, 그 외의 오류는 기본값과 함께 돌려주어 호출자가 로그로 남기게 한다.
 func Load() (Resolved, error) {
@@ -182,6 +224,13 @@ func resolve(c Config) Resolved {
 		BehindPrefix: stringOr(c.BehindPrefix, defaultBehindPrefix),
 		AheadPrefix:  stringOr(c.AheadPrefix, defaultAheadPrefix),
 		StaleLabel:   stringOr(c.StaleLabel, defaultStaleLabel),
+
+		GoneToken:            check(stringOr(c.GoneToken, defaultGoneToken)),
+		GoneLabel:            stringOr(c.GoneLabel, defaultGoneLabel),
+		MergedToken:          check(stringOr(c.MergedToken, defaultMergedToken)),
+		MergedLabel:          stringOr(c.MergedLabel, defaultMergedLabel),
+		CatchupToken:         check(stringOr(c.CatchupToken, defaultCatchupToken)),
+		CatchupConflictLabel: stringOr(c.CatchupConflictLabel, defaultCatchupConflictLabel),
 		// 기본으로 켜 둔다. 하는 일이 빨리 감기뿐이라 사용자가 만든 것을 잃을 수 없고,
 		// 낡은 바닥 위에서 새 작업을 시작하는 것이 이 플러그인이 막으려는 바로 그 상황이다.
 		FreshWorktrees: boolOr(c.FreshWorktrees, true),
