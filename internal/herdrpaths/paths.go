@@ -15,7 +15,7 @@ import (
 )
 
 // PluginID는 herdr 매니페스트에 적은 id다. 디렉터리 이름이 여기서 나온다.
-const PluginID = "pull-status"
+const PluginID = "git-upstream"
 
 const appDirName = "herdr"
 

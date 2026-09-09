@@ -24,7 +24,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"herdr-pull-status/internal/herdrpaths"
+	"herdr-git-upstream/internal/herdrpaths"
 )
 
 // Store는 상태 파일들이 사는 자리다.

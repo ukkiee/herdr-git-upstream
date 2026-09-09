@@ -17,8 +17,8 @@ import (
 	"log/slog"
 	"os"
 
-	"herdr-pull-status/internal/config"
-	"herdr-pull-status/internal/gitrepo"
+	"herdr-git-upstream/internal/config"
+	"herdr-git-upstream/internal/gitrepo"
 )
 
 // event는 herdr가 HERDR_PLUGIN_EVENT_JSON으로 넘겨주는 봉투 중 필요한 부분이다.

@@ -1,3 +1,3 @@
-module herdr-pull-status
+module herdr-git-upstream
 
 go 1.24

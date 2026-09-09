@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"herdr-pull-status/internal/config"
+	"herdr-git-upstream/internal/config"
 )
 
 // herdr는 원본 체크아웃의 HEAD를 기준으로 worktree를 만들고 fetch는 하지 않는다.

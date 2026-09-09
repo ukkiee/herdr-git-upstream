@@ -19,8 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"herdr-pull-status/internal/config"
-	"herdr-pull-status/internal/state"
+	"herdr-git-upstream/internal/config"
+	"herdr-git-upstream/internal/state"
 )
 
 const (

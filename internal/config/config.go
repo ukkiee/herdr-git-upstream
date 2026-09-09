@@ -1,6 +1,6 @@
 // Package config는 플러그인 설정을 읽는다.
 //
-// 설정 파일은 herdr가 관리하는 디렉터리에 둔다. 경로는 `herdr plugin config-dir pull-status`로
+// 설정 파일은 herdr가 관리하는 디렉터리에 둔다. 경로는 `herdr plugin config-dir git-upstream`로
 // 확인할 수 있고, 파일이 없으면 모든 값이 기본값으로 동작한다. 설정 없이도 바로 쓸 수 있어야 하므로
 // 파싱에 실패하더라도 기본값으로 진행하고 오류는 로그로만 남긴다.
 package config
@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"herdr-pull-status/internal/herdrpaths"
+	"herdr-git-upstream/internal/herdrpaths"
 )
 
 // FileName은 설정 디렉터리 안에서 찾는 파일 이름이다.

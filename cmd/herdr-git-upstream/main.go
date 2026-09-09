@@ -1,4 +1,4 @@
-// herdr-pull-status는 herdr 사이드바에 "이 저장소는 원격보다 몇 커밋 뒤처져 있다"를 띄운다.
+// herdr-git-upstream는 herdr 사이드바에 "이 저장소는 원격보다 몇 커밋 뒤처져 있다"를 띄운다.
 //
 // herdr는 사이드바에 앞뒤 커밋 수를 그리지만, 그 비교 대상인 원격 추적 참조를 스스로 갱신하지는
 // 않는다. 그래서 원격에 새 커밋이 올라와도 누군가 fetch 하기 전까지는 아무 변화가 없다.
@@ -20,24 +20,24 @@ import (
 	"os/signal"
 	"syscall"
 
-	"herdr-pull-status/internal/config"
-	"herdr-pull-status/internal/daemon"
-	"herdr-pull-status/internal/freshen"
-	"herdr-pull-status/internal/state"
+	"herdr-git-upstream/internal/config"
+	"herdr-git-upstream/internal/daemon"
+	"herdr-git-upstream/internal/freshen"
+	"herdr-git-upstream/internal/state"
 )
 
 const version = "0.1.0"
 
-const usage = `herdr-pull-status ` + version + `
+const usage = `herdr-git-upstream ` + version + `
 
 사용법:
-  herdr-pull-status daemon [--detach|--foreground]   배경 갱신 루프를 띄운다
-  herdr-pull-status fetch                            데몬을 깨운다 (herdr 이벤트 훅용)
-  herdr-pull-status refresh                          스로틀을 무시하고 전체를 갱신한다
-  herdr-pull-status worktree-created                 새 worktree를 최신 상태로 맞춘다
-  herdr-pull-status stop                             데몬을 멈춘다
-  herdr-pull-status status                           데몬과 설정 상태를 출력한다
-  herdr-pull-status version                          판 번호를 출력한다
+  herdr-git-upstream daemon [--detach|--foreground]   배경 갱신 루프를 띄운다
+  herdr-git-upstream fetch                            데몬을 깨운다 (herdr 이벤트 훅용)
+  herdr-git-upstream refresh                          스로틀을 무시하고 전체를 갱신한다
+  herdr-git-upstream worktree-created                 새 worktree를 최신 상태로 맞춘다
+  herdr-git-upstream stop                             데몬을 멈춘다
+  herdr-git-upstream status                           데몬과 설정 상태를 출력한다
+  herdr-git-upstream version                          판 번호를 출력한다
 `
 
 func main() {
@@ -247,7 +247,7 @@ func alreadyRunning() bool {
 func newLogger(w io.Writer) *slog.Logger {
 	level := slog.LevelInfo
 	// 문제를 쫓을 때 환경변수 하나로 상세 로그를 켤 수 있게 한다.
-	if os.Getenv("HERDR_PULL_STATUS_DEBUG") != "" {
+	if os.Getenv("HERDR_GIT_UPSTREAM_DEBUG") != "" {
 		level = slog.LevelDebug
 	}
 	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level}))

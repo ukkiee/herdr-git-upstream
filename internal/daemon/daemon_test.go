@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"herdr-pull-status/internal/state"
+	"herdr-git-upstream/internal/state"
 )
 
 // 잠금 갱신이 갱신 작업과 같은 흐름에 있으면, 오래 걸리는 회차 한 번이 데몬을 죽은 것으로 만든다.

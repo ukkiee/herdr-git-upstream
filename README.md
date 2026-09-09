@@ -1,4 +1,4 @@
-# herdr-pull-status
+# herdr-git-upstream
 
 **pull 받아야 하는 저장소를 herdr 사이드바에서 바로 알아본다.** Linux, macOS, Windows에서 동작한다.
 
@@ -47,13 +47,13 @@ let base = params.base.unwrap_or_else(|| "HEAD".into());
 ## 설치
 
 ```sh
-herdr plugin install <owner>/herdr-pull-status
+herdr plugin install <owner>/herdr-git-upstream
 ```
 
 로컬에서 개발 중이라면 이렇게 붙인다.
 
 ```sh
-herdr plugin link /Users/ukyi/personal/herdr-pull-status
+herdr plugin link /Users/ukyi/personal/herdr-git-upstream
 ```
 
 설치할 때 herdr가 `go build`를 한 번 돌린다. Go 1.24 이상이 필요하며, 표준 라이브러리만 쓰므로
@@ -105,7 +105,7 @@ HEAD가 분리되어 있거나, upstream이 설정되지 않은 워크스페이�
 
 ## 설정
 
-`herdr plugin config-dir pull-status`가 알려 주는 디렉터리에 `config.json`을 둔다. 파일이 없으면
+`herdr plugin config-dir git-upstream`가 알려 주는 디렉터리에 `config.json`을 둔다. 파일이 없으면
 모든 값이 기본값으로 동작한다.
 
 ```json
@@ -200,16 +200,16 @@ ssh를 지정하며, 그 경우에도 멈춤은 제한 시간이 걷어 낸다.
 ## 명령
 
 ```sh
-herdr plugin action invoke refresh --plugin pull-status   # 스로틀을 무시하고 지금 갱신
-herdr plugin action invoke start   --plugin pull-status   # 데몬 시작
-herdr plugin action invoke stop    --plugin pull-status   # 데몬 중지
+herdr plugin action invoke refresh --plugin git-upstream   # 스로틀을 무시하고 지금 갱신
+herdr plugin action invoke start   --plugin git-upstream   # 데몬 시작
+herdr plugin action invoke stop    --plugin git-upstream   # 데몬 중지
 ```
 
 실행 파일을 직접 부를 수도 있다.
 
 ```sh
-./bin/herdr-pull-status status    # 데몬과 설정 상태를 JSON 으로 출력
-./bin/herdr-pull-status refresh
+./bin/herdr-git-upstream status    # 데몬과 설정 상태를 JSON 으로 출력
+./bin/herdr-git-upstream refresh
 ```
 
 ## 문제를 살펴볼 때
@@ -217,11 +217,11 @@ herdr plugin action invoke stop    --plugin pull-status   # 데몬 중지
 `status`가 알려 주는 로그 파일을 먼저 본다.
 
 ```sh
-./bin/herdr-pull-status status
-tail -f "$(./bin/herdr-pull-status status | sed -n 's/.*"log_path": "\(.*\)".*/\1/p')"
+./bin/herdr-git-upstream status
+tail -f "$(./bin/herdr-git-upstream status | sed -n 's/.*"log_path": "\(.*\)".*/\1/p')"
 ```
 
-상세 로그가 필요하면 `HERDR_PULL_STATUS_DEBUG=1`을 준 채로 데몬을 다시 띄운다.
+상세 로그가 필요하면 `HERDR_GIT_UPSTREAM_DEBUG=1`을 준 채로 데몬을 다시 띄운다.
 
 아무것도 보이지 않는다면 대개 둘 중 하나다. 사이드바 `rows`에 토큰을 넣지 않았거나,
 사이드바를 접어 두었거나(접힌 상태에서는 herdr가 번호와 상태 점만 그린다).

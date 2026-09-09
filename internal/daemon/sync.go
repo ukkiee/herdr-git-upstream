@@ -8,15 +8,15 @@ import (
 	"sync"
 	"time"
 
-	"herdr-pull-status/internal/config"
-	"herdr-pull-status/internal/gitrepo"
-	"herdr-pull-status/internal/herdrcli"
-	"herdr-pull-status/internal/state"
+	"herdr-git-upstream/internal/config"
+	"herdr-git-upstream/internal/gitrepo"
+	"herdr-git-upstream/internal/herdrcli"
+	"herdr-git-upstream/internal/state"
 )
 
 // Source는 herdr에 토큰을 보고할 때 밝히는 출처다. herdr는 출처마다 토큰을 따로 보관하므로,
 // 이 이름이 다른 플러그인의 토큰과 섞이지 않게 해 준다.
-const Source = "pull-status"
+const Source = "git-upstream"
 
 // maxParallelFetch는 동시에 진행할 fetch 수다. 저장소가 많아도 네트워크와 자격 증명 도우미에
 // 한꺼번에 부담을 주지 않으면서, 느린 원격 하나가 전체를 붙잡지 않을 만큼은 겹쳐 돌린다.
