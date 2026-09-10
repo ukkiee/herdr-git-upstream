@@ -209,10 +209,10 @@ and removes only those marked `safe`.
 | `herdr-git-upstream worktrees [--cwd <path>]` | Directly in a terminal; works without the daemon or herdr |
 
 The first two open a herdr popup pane. The last draws in the current pane. herdr has no action picker,
-so **bind the action to a key to make it readily accessible**. An action uses the repository belonging
-to `HERDR_WORKSPACE_ID`; a terminal invocation uses the current directory, or `--cwd` when supplied.
-If that location is not a Git repository, the command prints `not a git repository: <path>` and exits
-with code 1. If herdr is unavailable, the screen falls back to `git worktree list`, shows
+so **bind the action to a key to make it readily accessible**. Both screens select the repository in
+this order: explicit `--cwd`, then `HERDR_WORKSPACE_ID`, then the process working directory. A shell
+inside herdr also inherits the workspace ID; use `--cwd <path>` to select another repository after `cd`.
+If that location is not a Git repository, the command reports the error and exits with code 1. If herdr is unavailable, the screen falls back to `git worktree list`, shows
 `herdr unavailable` in the header, and lacks information about open herdr workspaces. Enter cannot
 switch workspaces in that mode.
 
@@ -241,7 +241,7 @@ the same assessment functions as the sidebar tokens.
 | Key | Action |
 | --- | --- |
 | `↑` `↓` `j` `k` | Move |
-| `Enter` | Select the workspace if open in herdr; otherwise run `herdr worktree open --path <path> --focus`. Then close the screen |
+| `Enter` | Select the workspace if open in herdr; otherwise run `herdr worktree open --cwd <main-checkout> --path <path> --focus`. Then close the screen |
 | `d` | Remove the selected worktree without confirmation if `safe`; otherwise show the reason in the footer |
 | `D` | Ask `Remove N worktrees? y/N` once, then remove all confirmed `safe` worktrees |
 | `r` | Fetch again |
@@ -266,9 +266,23 @@ herdr's built-in popup starts from the current HEAD. This popup lists the curren
 the remote default branch, and the repository's configured integration branches, in that order.
 Each distinct ref appears once.
 
-Use `herdr plugin action invoke new-worktree --plugin git-upstream` to open it in a herdr pane. To bind
-it to a key, enable the commented `git-upstream.new-worktree` block in the `setup` output. It does not
-replace the default key binding. Creation requires a running herdr server.
+Use `herdr plugin action invoke new-worktree --plugin git-upstream` to open it in a herdr pane.
+Creation requires a running herdr server.
+
+To bind it to a key, enable the commented `git-upstream.new-worktree` block from `setup`, or use the
+block below. When the required sidebar tokens and worktrees binding are already configured, `setup`
+omits this optional block. In your existing `[keys]` table, set `new_worktree = ""` to free
+`prefix+shift+g` from herdr's built-in creation popup; edit that table instead of adding a second
+`[keys]` header. Then uncomment and add this command binding after that table. The plugin does not
+edit your configuration or key bindings for you.
+
+```toml
+# [[keys.command]]
+# key = "prefix+shift+g"
+# type = "plugin_action"
+# command = "git-upstream.new-worktree"
+# description = "git upstream: new worktree"
+```
 
 The suggested name comes from the base branch and avoids names already used by local branches,
 remote-tracking branches, or worktrees. If occupied, it tries `-2`, `-3`, and so on. The next suggestion
@@ -350,8 +364,8 @@ directory. Sharing a lock would let the first daemon prevent other sessions from
 leaving those sessions without tokens.
 
 **Directories follow herdr's rules.** Commands launched by herdr receive directory locations through
-environment variables; direct shell invocations do not. Looking elsewhere would ignore configuration
-and split the locks, allowing two daemons to start.
+plugin environment variables; direct invocations may lack those directory variables. Looking elsewhere
+would ignore configuration and split the locks, allowing two daemons to start.
 
 **New worktrees move only by fast-forward.** The plugin identifies the base branch, fetches it, and
 runs `merge --ff-only`. A fast-forward preserves existing commits. If the worktree is dirty, the new

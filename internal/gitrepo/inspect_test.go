@@ -318,26 +318,40 @@ func TestContainingRemoteRefsExcludesPullRequestHeads(t *testing.T) {
 	}
 }
 
-// 브랜치가 아니라고 확실히 말할 수 있는 출발지만 거른다. 더 넓은 패턴은 브랜치를 품을 수 있다.
-func TestBranchSource(t *testing.T) {
-	cases := []struct {
-		source string
-		want   bool
-	}{
-		{"refs/heads/*", true},
-		{"refs/heads/main", true},
-		{"refs/heads/widget-studio/*", true},
-		{"refs/*", true},
-		{"refs/pull/*/head", false},
-		{"refs/merge-requests/*/head", false},
-		{"refs/tags/*", false},
-		{"refs/notes/*", false},
-		{"HEAD", false},
+// refs/* 사양은 브랜치와 PR을 함께 가져온다. 실제 출발지를 역으로 계산해 브랜치만 남겨야 한다.
+func TestContainingRemoteRefsMapsBroadSources(t *testing.T) {
+	requireGit(t)
+	base := t.TempDir()
+	remote, _ := seedRemote(t, base)
+	work := filepath.Join(base, "work")
+	run(t, base, "git", "clone", "--quiet", remote, work)
+	configure(t, work)
+	run(t, remote, "git", "update-ref", "refs/pull/7/head", "refs/heads/main")
+	run(t, remote, "git", "update-ref", "refs/tags/v1", "refs/heads/main")
+	run(t, work, "git", "config", "remote.origin.fetch", "+refs/*:refs/remotes/origin/*")
+	run(t, work, "git", "fetch", "--quiet", "origin")
+
+	ctx := context.Background()
+	runner := Runner{}
+	repo, err := runner.Discover(ctx, work)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range cases {
-		if got := branchSource(tc.source); got != tc.want {
-			t.Fatalf("%q -> %v, 기대값 %v", tc.source, got, tc.want)
+	for _, ref := range []string{"refs/remotes/origin/heads/main", "refs/remotes/origin/pull/7/head", "refs/remotes/origin/tags/v1"} {
+		if _, err := runner.CommitOf(ctx, repo, ref); err != nil {
+			t.Fatalf("시험 참조가 가져와졌어야 한다: %s: %v", ref, err)
 		}
+	}
+	head, err := runner.HeadCommit(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := runner.ContainingRemoteRefs(ctx, repo, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, []string{"refs/remotes/origin/heads/main"}) {
+		t.Fatalf("넓은 참조 사양에서도 실제 원격 브랜치만 남아야 한다: %v", got)
 	}
 }
 

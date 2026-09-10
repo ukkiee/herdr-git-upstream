@@ -204,9 +204,10 @@ worktree를 열 개 넘게 열어 두면 어느 것이 끝난 작업인지 사�
 | `herdr-git-upstream worktrees [--cwd <path>]` | 터미널에서 직접. 데몬 없이도, herdr 없이도 돈다 |
 
 앞의 둘은 herdr 팝업 pane으로 열리고, 마지막은 지금 있는 페인에 그대로 그린다. herdr에는 액션을 골라
-실행하는 화면이 없으므로 **키에 묶기 전에는 없는 것과 같다.** 어느 저장소인지는 액션으로 열면
-`HERDR_WORKSPACE_ID`가 속한 저장소, 터미널에서 부르면 현재 디렉터리(`--cwd`를 주면 그것)다. 그 자리가 git
-저장소가 아니면 `not a git repository: <경로>`를 적고 종료 코드 1로 끝난다. herdr에 닿지 않으면
+실행하는 화면이 없으므로 **키에 묶기 전에는 없는 것과 같다.** 두 화면 모두 명시한 `--cwd`,
+`HERDR_WORKSPACE_ID`, 현재 디렉터리 순으로 저장소를 고른다.
+herdr 안의 셸에도 워크스페이스 ID가 있으므로 `cd` 뒤 다른 저장소를 보려면 `--cwd <경로>`를 준다. 그 자리가 git
+저장소가 아니면 오류를 알리고 종료 코드 1로 끝난다. herdr에 닿지 않으면
 `git worktree list`로 대신하되 제목 줄에 `herdr unavailable`이 보이고, 그때는 "herdr에 열려 있음" 정보가
 없어 Enter로 옮겨 갈 수 없다.
 
@@ -234,7 +235,7 @@ worktree를 열 개 넘게 열어 두면 어느 것이 끝난 작업인지 사�
 | 키 | 동작 |
 | --- | --- |
 | `↑` `↓` `j` `k` | 이동 |
-| `Enter` | herdr에 열려 있으면 그 워크스페이스로, 아니면 `herdr worktree open --path <경로> --focus`. 그리고 화면을 닫는다 |
+| `Enter` | herdr에 열려 있으면 그 워크스페이스로, 아니면 `herdr worktree open --cwd <본 체크아웃> --path <경로> --focus`. 그리고 화면을 닫는다 |
 | `d` | 선택한 것이 `safe`면 확인 없이 지운다. 아니면 이유를 아래 줄에 보여 준다 |
 | `D` | `safe` 전부를 "Remove N worktrees? y/N" 한 번 묻고 지운다 |
 | `r` | 다시 fetch |
@@ -257,8 +258,21 @@ herdr 기본 팝업은 현재 HEAD에서 시작하지만, 이 팝업에서는 �
 브랜치, 저장소에 설정한 통합 브랜치를 순서대로 보여 준다. 같은 참조는 한 번만 나온다.
 
 `herdr plugin action invoke new-worktree --plugin git-upstream`으로 herdr pane에 열 수 있다.
-키로 사용하려면 `setup` 출력의 `git-upstream.new-worktree` 주석 블록을 활성화한다. 기본 키는
-바꾸지 않는다. 생성에는 실행 중인 herdr가 필요하다.
+생성에는 실행 중인 herdr가 필요하다.
+
+키로 사용하려면 `setup` 출력의 `git-upstream.new-worktree` 주석 블록이나 아래 블록을 활성화한다.
+필수 사이드바 토큰과 worktrees 키가 이미 설정되어 있으면 `setup`은 이 선택 항목을 생략한다.
+기존 `[keys]` 테이블에서 `new_worktree = ""`로 바꿔 herdr 내장 생성 팝업의 `prefix+shift+g` 키를 비운다.
+`[keys]` 헤더를 중복해서 추가하지 말고 기존 테이블을 수정한다. 그런 다음 아래 블록의 주석을 풀어
+그 테이블 뒤에 추가한다. 플러그인이 설정 파일이나 키를 대신 바꾸지는 않는다.
+
+```toml
+# [[keys.command]]
+# key = "prefix+shift+g"
+# type = "plugin_action"
+# command = "git-upstream.new-worktree"
+# description = "git upstream: new worktree"
+```
 
 이름은 기준 브랜치에서 가져오되 로컬 브랜치, 원격 추적 브랜치, worktree에서 쓰는 이름을 피한다.
 이미 사용 중이면 `-2`, `-3` 순으로 찾는다. `feature-2` 다음 후보는 `feature-3`이다.
@@ -336,7 +350,7 @@ ssh를 지정하며, 그 경우에도 멈춤은 제한 시간이 걷어 낸다.
 하나다. 잠금을 나눠 쓰면 먼저 뜬 데몬이 다른 세션의 데몬까지 막아, 그 세션에는 영영 토큰이 오지 않는다.
 
 **디렉터리는 herdr와 같은 규칙으로 찾는다.** herdr가 띄운 명령에는 위치가 환경변수로 들어오지만
-셸에서 직접 부를 때는 없다. 그때 다른 자리를 보면 설정이 통째로 무시되고, 잠금이 갈려 데몬이 둘 뜬다.
+일반 셸에서 직접 부를 때는 플러그인 전용 경로 환경변수가 없을 수 있다. 그때 다른 자리를 보면 설정이 통째로 무시되고, 잠금이 갈려 데몬이 둘 뜬다.
 
 **새 worktree는 빨리 감기로만 옮긴다.** 기준이 된 브랜치를 찾아 그것만 가져온 뒤 `merge --ff-only`로
 앞당긴다. 빨리 감기는 정의상 잃을 것이 없는 이동이므로, 사용자가 만든 것을 버릴 수 없다. 작업 트리가

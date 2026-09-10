@@ -2,6 +2,7 @@ package herdrcli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -17,9 +18,19 @@ import (
 // 인자를 보지 않고 기다렸다가 빈 응답을 낼 뿐이라, 실행 중인 herdr 서버에는 아무것도 보내지 않는다.
 const fakeHerdrDelayEnv = "HERDR_GIT_UPSTREAM_TEST_FAKE_HERDR_DELAY_MS"
 const fakeHerdrErrorEnv = "HERDR_GIT_UPSTREAM_TEST_FAKE_HERDR_ERROR"
+const fakeHerdrArgsEnv = "HERDR_GIT_UPSTREAM_TEST_FAKE_HERDR_ARGS"
 const fakeHerdrResponseEnv = "HERDR_GIT_UPSTREAM_TEST_FAKE_HERDR_RESPONSE"
 
 func TestMain(m *testing.M) {
+	if raw := os.Getenv(fakeHerdrArgsEnv); raw != "" {
+		var want []string
+		if err := json.Unmarshal([]byte(raw), &want); err != nil || !reflect.DeepEqual(os.Args[1:], want) {
+			fmt.Fprintf(os.Stderr, "args %q, want %s", os.Args[1:], raw)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	if raw := os.Getenv(fakeHerdrErrorEnv); raw != "" {
 		fmt.Fprintln(os.Stderr, raw)
 		os.Exit(1)
@@ -200,5 +211,20 @@ func TestWorktreeCreateUsesMutationTimeout(t *testing.T) {
 	path, err := c.WorktreeCreate(context.Background(), "w1", "", "feature", "origin/main")
 	if err != nil || path != "/new" {
 		t.Fatalf("체크아웃은 조회보다 오래 걸려도 완료를 기다린다: %q, %v", path, err)
+	}
+}
+
+func TestWorktreeOpenCarriesMainCheckoutSource(t *testing.T) {
+	args, err := json.Marshal([]string{"worktree", "open", "--cwd", "/repo/main checkout", "--path", "/repo/sibling", "--focus"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(fakeHerdrArgsEnv, string(args))
+	c := &Client{Binary: os.Args[0]}
+	if err := c.WorktreeOpen(context.Background(), "/repo/main checkout", "/repo/sibling"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.WorktreeOpen(context.Background(), "", "/repo/sibling"); err == nil {
+		t.Fatal("source-less open must be rejected")
 	}
 }

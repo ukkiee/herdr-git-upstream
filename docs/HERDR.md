@@ -82,14 +82,14 @@ if local_branch_exists(...) { add_existing_branch } else { add -b ... base }
 herdr worktree list --workspace <id>       # 또는 --cwd <path>
 herdr worktree create --workspace <id> --branch <name> --base <ref> --focus
 herdr worktree create --cwd <path> --branch <name> --base <ref> --path <path> --focus
-herdr worktree open --path <path> --focus
+herdr worktree open --cwd <main-checkout> --path <path> --focus
 herdr worktree remove --workspace <id>
 herdr workspace focus <id>
 ```
 
 목록은 같은 저장소의 worktree 전부와 `open_workspace_id`, `is_linked_worktree`, `is_prunable`,
 `is_detached`를 돌려준다. `source.repo_name`은 경로 미리보기에 쓰는 저장소 이름이다.
-목록은 연결된 worktree에서도 조회되지만, 생성 요청의 source는 본 체크아웃이어야 한다
+목록은 연결된 worktree에서도 조회되지만, 생성·열기 요청의 source는 본 체크아웃이어야 한다
 (`src/app/api/worktrees.rs`의 `resolve_worktree_source`, `linked_worktree_source`).
 
 생성 성공은 `result.type = "worktree_created"`이며 실제 위치는 `result.worktree.path`다.
@@ -144,8 +144,10 @@ herdr는 동시에 도는 플러그인 명령을 32개로 제한한다(`src/app/
 `HERDR_SOCKET_PATH`, `HERDR_PLUGIN_EVENT`, `HERDR_PLUGIN_EVENT_JSON`, 그리고 문맥이 있을 때
 `HERDR_WORKSPACE_ID` / `HERDR_TAB_ID` / `HERDR_PANE_ID`(`src/app/api/plugins/runtime.rs:42-80`).
 
-셸에서 직접 부를 때는 이 값들이 없다. 그때 herdr와 다른 자리를 대안으로 고르면 설정이 무시되고
-잠금이 갈려 데몬이 둘 뜬다. herdr의 경로 계산을 그대로 옮겨 두었다(`internal/herdrpaths`).
+일반 셸에서는 플러그인 전용 설정·상태 경로가 없을 수 있다. 반면 herdr 페인의 셸에는
+`HERDR_WORKSPACE_ID` / `HERDR_TAB_ID` / `HERDR_PANE_ID`가 들어온다
+(`src/pane.rs:138-155,1961-1964`, `src/workspace.rs:363`). 경로 환경변수가 없을 때 herdr와
+다른 자리를 대안으로 고르면 설정이 무시되고 잠금이 갈려 데몬이 둘 뜬다. herdr의 경로 계산을 그대로 옮겨 두었다(`internal/herdrpaths`).
 
 | 용도 | 자리 | 출처 |
 | --- | --- | --- |
@@ -153,6 +155,9 @@ herdr는 동시에 도는 플러그인 명령을 32개로 제한한다(`src/app/
 | 상태 | `<상태 뿌리>/plugins/<id>` | `src/plugin_paths.rs:21` |
 
 뿌리는 `XDG_*`를 먼저 보고, 없으면 플랫폼 기본값을 쓴다(`src/config/io.rs:30-100`).
+herdr 자체 설정 파일은 `HERDR_CONFIG_PATH`가 설정되어 있으면 그 값을 그대로 쓰고,
+없으면 `<설정 뿌리>/config.toml`을 쓴다(`src/config/io.rs:169-174`). 플러그인의 setup, status와
+생성 팝업 경로 미리보기도 같은 경로를 읽는다.
 
 ### 이벤트 페이로드
 

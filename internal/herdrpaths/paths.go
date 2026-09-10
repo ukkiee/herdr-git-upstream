@@ -27,12 +27,13 @@ func ConfigDir() string {
 	return filepath.Join(configRoot(), "plugins", "config", PluginID)
 }
 
-// ConfigFile은 herdr 자신의 설정 파일이다. herdr는 <설정 뿌리>/config.toml을 읽는다.
-//
-// 플러그인 설정(ConfigDir)과 달리 환경변수로 덮어쓰는 길이 없다. herdr가 플러그인에게 자기 설정
-// 파일의 자리를 알려 주지 않기 때문에, 언제나 herdr와 같은 계산으로 찾는다. setup 명령이 붙여 넣을
-// 자리를 알려 줄 때와, status가 사이드바 설정이 들어 있는지 볼 때 쓴다.
+// ConfigFile은 herdr 자신의 설정 파일이다. HERDR_CONFIG_PATH가 설정되어 있으면
+// herdr처럼 빈 값이나 상대 경로도 그대로 쓰고, 없으면 <설정 뿌리>/config.toml을 읽는다.
+// setup, status, 생성 팝업의 경로 미리보기가 같은 파일을 읽도록 한곳에서 정한다.
 func ConfigFile() string {
+	if path, ok := os.LookupEnv("HERDR_CONFIG_PATH"); ok {
+		return path
+	}
 	return filepath.Join(configRoot(), "config.toml")
 }
 

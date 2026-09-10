@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -217,6 +218,22 @@ func (r Runner) TrackingRefFor(ctx context.Context, repo Repo, remote, remoteRef
 	return "refs/remotes/" + remote + "/" + strings.TrimPrefix(remoteRef, "refs/heads/")
 }
 
+// TrackingRefsFor는 같은 원격 참조를 비추는 목적지를 모두 돌려준다. 한 출발지를 여러 목적지에
+// 가져오는 참조 사양에서는 전부 자기 사본이므로 merged 판정에서 빠져야 한다. 일치하는 사양이
+// 없으면 TrackingRefFor와 같은 관례를 쓴다. 결과는 항상 하나 이상이며 설정 순서를 따른다.
+func (r Runner) TrackingRefsFor(ctx context.Context, repo Repo, remote, remoteRef string) []string {
+	var refs []string
+	for _, spec := range r.fetchRefspecs(ctx, repo, remote) {
+		if ref, ok := substituteRefspec(spec.source, spec.destination, remoteRef); ok && !slices.Contains(refs, ref) {
+			refs = append(refs, ref)
+		}
+	}
+	if len(refs) == 0 {
+		refs = append(refs, "refs/remotes/"+remote+"/"+strings.TrimPrefix(remoteRef, "refs/heads/"))
+	}
+	return refs
+}
+
 // RemoteRefFor는 추적 참조 이름에서 원격 쪽 참조 이름을 거꾸로 알아낸다.
 //
 // refs/remotes/<원격>/HEAD가 가리키는 것은 추적 참조인데, fetch 하려면 원격 쪽 이름이 있어야 한다.
@@ -242,9 +259,7 @@ func (r Runner) remoteRefFromRefspec(ctx context.Context, repo Repo, remote, tra
 	return ""
 }
 
-// trackingRefFromRefspec은 원격에 설정된 fetch 참조 사양에 remoteRef를 대입해 목적지 이름을 만든다.
-// 참조 사양을 손댄 저장소에서는 refs/remotes/<원격>/<브랜치>라는 통념이 맞지 않기 때문에,
-// 관례로 넘어가기 전에 실제 설정을 먼저 본다.
+// trackingRefFromRefspec은 원격에 설정된 fetch 참조 사양에 remoteRef를 대입해 첫 목적지를 만든다.
 func (r Runner) trackingRefFromRefspec(ctx context.Context, repo Repo, remote, remoteRef string) string {
 	for _, spec := range r.fetchRefspecs(ctx, repo, remote) {
 		if ref, ok := substituteRefspec(spec.source, spec.destination, remoteRef); ok {
@@ -310,16 +325,6 @@ func matchRefspecSide(pattern, ref string) (middle string, ok bool) {
 		return "", false
 	}
 	return ref[len(prefix) : len(ref)-len(suffix)], true
-}
-
-// branchSource는 참조 사양의 출발지가 브랜치(refs/heads/ 아래)를 가리킬 수 있는지 답한다.
-//
-// "refs/*"처럼 더 넓은 패턴도 브랜치를 품으므로 브랜치로 본다. 브랜치가 아니라고 확실히 말할 수 있는
-// 것만 걸러야, 사용자가 손댄 참조 사양 때문에 멀쩡한 원격 브랜치가 판정에서 빠지는 일이 없다.
-// GitHub의 refs/pull/*/head, GitLab의 refs/merge-requests/*/head가 브랜치가 아닌 대표적인 출발지다.
-func branchSource(source string) bool {
-	prefix, _, _ := strings.Cut(source, "*")
-	return strings.HasPrefix(prefix, "refs/heads/") || strings.HasPrefix("refs/heads/", prefix)
 }
 
 // CountsFor는 지금 체크아웃된 HEAD와 추적 참조 사이의 앞뒤 커밋 수를 센다.

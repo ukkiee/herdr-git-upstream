@@ -282,3 +282,22 @@ func TestLoadReportsReadErrorsWithAnEmptyScan(t *testing.T) {
 		t.Fatal("실패했을 때는 빈 결과여야 한다")
 	}
 }
+
+// setup 판독과 생성 팝업의 경로 미리보기가 실제 herdr 대체 설정을 함께 읽어야 한다.
+func TestLoadUsesHerdrConfigOverrideForSidebarAndWorktreePath(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", root)
+	path := filepath.Join(root, "custom.toml")
+	t.Setenv("HERDR_CONFIG_PATH", path)
+	body := "[ui.sidebar.spaces]\nrows = [[{token = \"$behind\"}]]\n[worktrees]\ndirectory = \"custom-worktrees\"\n"
+	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	scan, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !scan.HasToken("behind") || scan.WorktreeDirectory() != "custom-worktrees" {
+		t.Fatalf("override not shared by sidebar and path preview: %+v", scan)
+	}
+}

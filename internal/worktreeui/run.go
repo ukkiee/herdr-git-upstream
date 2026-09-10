@@ -23,7 +23,7 @@ type Herdr interface {
 	WorktreeList(ctx context.Context, workspaceID, cwd string) (herdrcli.WorktreeListResult, error)
 	WorkspaceList(ctx context.Context) ([]herdrcli.Workspace, error)
 	WorktreeRemove(ctx context.Context, workspaceID string) error
-	WorktreeOpen(ctx context.Context, path string) error
+	WorktreeOpen(ctx context.Context, sourceCWD, path string) error
 	WorkspaceFocus(ctx context.Context, id string) error
 }
 
@@ -430,5 +430,5 @@ func (c *controller) open(ctx context.Context) error {
 	if row.OpenWorkspaceID != "" {
 		return c.herdr.WorkspaceFocus(ctx, row.OpenWorkspaceID)
 	}
-	return c.herdr.WorktreeOpen(ctx, row.Path)
+	return c.herdr.WorktreeOpen(ctx, c.main.Root, row.Path)
 }

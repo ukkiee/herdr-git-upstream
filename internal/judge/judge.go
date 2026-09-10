@@ -50,6 +50,9 @@ type Self struct {
 	// (feature → origin/main) 있다. 어느 쪽이든 조상 검사의 근거로는 삼지 않는다. 거기서 갈라져 나왔을
 	// 뿐인 새 브랜치도 그 참조에 들어 있기 때문이다. 통합 브랜치라면 merge-tree 비교가 따로 본다.
 	Tracking string
+	// TrackingCopies는 upstream을 여러 목적지에 가져온 사본들이다. 로컬과 원격의 브랜치 이름이
+	// 달라도 조상 검사에서는 모두 뺀다. Copies와 달리 통합 브랜치 자체라는 근거로는 쓰지 않는다.
+	TrackingCopies []string
 }
 
 // SelfRefs는 판정 대상 브랜치 자신을 가리키는 원격 참조들을 모은다.
@@ -62,6 +65,7 @@ func SelfRefs(ctx context.Context, git gitrepo.Runner, repo gitrepo.Repo, branch
 	var self Self
 	if upstream != nil {
 		self.Tracking = upstream.TrackingRef
+		self.TrackingCopies = git.TrackingRefsFor(ctx, repo, upstream.Remote, upstream.RemoteRef)
 	}
 	if branch == "" {
 		return self
@@ -69,7 +73,7 @@ func SelfRefs(ctx context.Context, git gitrepo.Runner, repo gitrepo.Repo, branch
 	remoteRef := "refs/heads/" + branch
 	if remotes, err := git.Remotes(ctx, repo); err == nil {
 		for _, remote := range remotes {
-			self.Copies = append(self.Copies, git.TrackingRefFor(ctx, repo, remote, remoteRef))
+			self.Copies = append(self.Copies, git.TrackingRefsFor(ctx, repo, remote, remoteRef)...)
 		}
 	}
 	if upstream != nil && upstream.RemoteRef == remoteRef && upstream.TrackingRef != "" && !slices.Contains(self.Copies, upstream.TrackingRef) {
@@ -109,7 +113,7 @@ func JudgeMerged(ctx context.Context, git gitrepo.Runner, repo gitrepo.Repo, hea
 		return Merged{}, err
 	}
 	for _, ref := range refs {
-		if ref == self.Tracking || slices.Contains(self.Copies, ref) {
+		if ref == self.Tracking || slices.Contains(self.TrackingCopies, ref) || slices.Contains(self.Copies, ref) {
 			continue
 		}
 		return Merged{Yes: true, By: "ancestor:" + ref}, nil

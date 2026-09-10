@@ -217,7 +217,10 @@ func (h *fakeHerdr) WorktreeRemove(ctx context.Context, workspaceID string) erro
 	return nil
 }
 
-func (h *fakeHerdr) WorktreeOpen(ctx context.Context, path string) error {
+func (h *fakeHerdr) WorktreeOpen(ctx context.Context, sourceCWD, path string) error {
+	if canonical(sourceCWD) != canonical(h.main.Root) {
+		return &herdrcli.ResponseError{Code: "linked_worktree_source", Message: "expected main checkout source"}
+	}
 	h.record("open " + filepath.Base(path))
 	return nil
 }

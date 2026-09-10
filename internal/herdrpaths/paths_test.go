@@ -17,3 +17,16 @@ func TestConfigFileSitsAtTheConfigRoot(t *testing.T) {
 		t.Fatalf("ConfigFile() = %q, 기대값 %q", got, want)
 	}
 }
+
+// herdr는 값이 설정되어 있으면 빈 값과 상대 경로도 PathBuf로 그대로 받는다.
+func TestConfigFileHonorsHerdrConfigPath(t *testing.T) {
+	for _, path := range []string{filepath.Join(t.TempDir(), "custom.toml"), "relative.toml", ""} {
+		t.Run(path, func(t *testing.T) {
+			t.Setenv("HERDR_CONFIG_PATH", path)
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			if got := ConfigFile(); got != path {
+				t.Fatalf("ConfigFile() = %q, want override %q", got, path)
+			}
+		})
+	}
+}

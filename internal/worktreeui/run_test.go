@@ -359,7 +359,8 @@ func TestLoopOpens(t *testing.T) {
 			if tc.opened {
 				herdr.open(done, "wDONE")
 			}
-			_, h := start(t, f, herdr, f.work)
+			// 연결된 worktree에서 열어도 source는 본 체크아웃이어야 한다.
+			_, h := start(t, f, herdr, done)
 			h.waitFor(t, "표", func(m Model) bool { return len(m.Rows) == 2 })
 			for i := 0; i < tc.cursor; i++ {
 				h.press(t, tui.Key{Kind: tui.KeyDown})

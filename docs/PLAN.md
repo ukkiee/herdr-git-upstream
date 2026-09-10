@@ -48,7 +48,8 @@ worktree 삭제는 경계에 걸쳐 있다. herdr-shear가 이미 잘하지만 �
 | 3. worktree 화면, 안전 판정 재확인과 삭제 | 완료 (`14a9820`, `889c9fe`) |
 | 4. 기준 브랜치를 고르는 생성 팝업 | 완료 (`4dcf54c`) |
 | 영문·한국어 README, 0.2.0 문서 정리 | 완료 |
-| 전체 교차 기능 검토 / herdr 연결 실측 | 진행 예정. 아래 순서대로 확인 |
+| 전체 교차 기능 검토 | 완료. [검토 기록](reviews/0.2.0-verification.md) |
+| herdr 연결 실측 | 다음 단계. 사용자 설정 적용은 수동 |
 
 2026-09-10 현재 전체 13개 패키지의 race 시험, vet, 여섯 플랫폼(linux/darwin/windows × amd64/arm64)
 교차 컴파일과 매니페스트 TOML 검사를 통과했다. Windows 실행은 미실측이다. 아직 herdr 에 붙이지 않았다.
@@ -251,8 +252,9 @@ herdr 에는 액션을 골라 실행하는 화면이 없고, 액션의 `contexts
  2 safe · d remove selected · D remove all safe · q close
 ```
 
-**저장소는 하나다.** 액션으로 열면 `HERDR_WORKSPACE_ID` 가 속한 저장소, 터미널에서 부르면 현재
-디렉터리의 저장소를 `herdr worktree list` 로 나열한다. 그 자리가 git 저장소가 아니면 그렇게 알리고 닫는다.
+**저장소는 하나다.** 두 화면의 선택 순서는 명시한 `--cwd`, `HERDR_WORKSPACE_ID`, 현재 디렉터리다.
+herdr 안의 일반 셸에도 워크스페이스 ID가 있으므로 `cd` 뒤 다른 저장소를 보려면 `--cwd`로 지정한다.
+선택한 저장소를 `herdr worktree list` 로 나열한다. 그 자리가 git 저장소가 아니면 그렇게 알리고 닫는다.
 herdr 에 닿지 않으면(데몬 없이 터미널에서 부른 경우 등) `git worktree list --porcelain` 으로 대신하되,
 그때는 "herdr 에 열려 있음" 정보가 없다.
 
@@ -282,7 +284,7 @@ prune 은 하지 않는다. README 의 약속을 지키고, 사용자의 참조�
 | 키 | 동작 |
 | --- | --- |
 | `↑` `↓` `j` `k` | 이동 |
-| `Enter` | herdr 에 열려 있으면 `herdr workspace focus <id>`, 아니면 `herdr worktree open --path <경로> --focus`. 그리고 화면을 닫는다 |
+| `Enter` | herdr 에 열려 있으면 `herdr workspace focus <id>`, 아니면 `herdr worktree open --cwd <본 체크아웃> --path <경로> --focus`. 그리고 화면을 닫는다 |
 | `d` | 선택한 것이 `safe` 면 확인 없이 지운다. 아니면 이유를 아래 줄에 보여 준다 |
 | `D` | `safe` 전부를 "Remove N worktrees? y/N" 한 번 묻고 지운다 |
 | `r` | 다시 fetch |

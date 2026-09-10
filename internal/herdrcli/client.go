@@ -231,11 +231,11 @@ func (c *Client) WorktreeRemove(ctx context.Context, workspaceID string) error {
 }
 
 // WorktreeOpen은 디스크에만 있는 worktree를 herdr 워크스페이스로 열고 그리로 옮겨 간다.
-func (c *Client) WorktreeOpen(ctx context.Context, path string) error {
-	if path == "" {
-		return fmt.Errorf("경로가 비어 있다")
+func (c *Client) WorktreeOpen(ctx context.Context, sourceCWD, path string) error {
+	if sourceCWD == "" || path == "" {
+		return fmt.Errorf("본 체크아웃과 worktree 경로가 모두 있어야 한다")
 	}
-	_, err := c.run(ctx, "worktree", "open", "--path", path, "--focus")
+	_, err := c.run(ctx, "worktree", "open", "--cwd", sourceCWD, "--path", path, "--focus")
 	return err
 }
 
