@@ -17,6 +17,7 @@ import (
 // 인자를 보지 않고 기다렸다가 빈 응답을 낼 뿐이라, 실행 중인 herdr 서버에는 아무것도 보내지 않는다.
 const fakeHerdrDelayEnv = "HERDR_GIT_UPSTREAM_TEST_FAKE_HERDR_DELAY_MS"
 const fakeHerdrErrorEnv = "HERDR_GIT_UPSTREAM_TEST_FAKE_HERDR_ERROR"
+const fakeHerdrResponseEnv = "HERDR_GIT_UPSTREAM_TEST_FAKE_HERDR_RESPONSE"
 
 func TestMain(m *testing.M) {
 	if raw := os.Getenv(fakeHerdrErrorEnv); raw != "" {
@@ -26,7 +27,11 @@ func TestMain(m *testing.M) {
 	if v := os.Getenv(fakeHerdrDelayEnv); v != "" {
 		ms, _ := strconv.Atoi(v)
 		time.Sleep(time.Duration(ms) * time.Millisecond)
-		fmt.Print(`{"id":"cli:fake","result":{}}`)
+		if raw := os.Getenv(fakeHerdrResponseEnv); raw != "" {
+			fmt.Print(raw)
+		} else {
+			fmt.Print(`{"id":"cli:fake","result":{}}`)
+		}
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
@@ -158,6 +163,8 @@ func TestCommandArguments(t *testing.T) {
 		got  []string
 		want []string
 	}{
+		{"worktree create: 워크스페이스", worktreeCreateArgs("w1", "/ignored", "new/feature", "origin/main"), []string{"worktree", "create", "--branch", "new/feature", "--base", "origin/main", "--focus", "--workspace", "w1"}},
+		{"worktree create: 경로", worktreeCreateArgs("", "/repo", "feature", "main"), []string{"worktree", "create", "--branch", "feature", "--base", "main", "--focus", "--cwd", "/repo"}},
 		{"worktree list: 워크스페이스가 있으면 그것", worktreeListArgs("w1", "/x"), []string{"worktree", "list", "--workspace", "w1"}},
 		{"worktree list: 없으면 cwd", worktreeListArgs("", "/x"), []string{"worktree", "list", "--cwd", "/x"}},
 		{"worktree list: 둘 다 없으면 옵션 없음", worktreeListArgs("", ""), []string{"worktree", "list"}},
@@ -170,5 +177,28 @@ func TestCommandArguments(t *testing.T) {
 				t.Fatalf("%v, 기대값 %v", tc.got, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseWorktreeCreated(t *testing.T) {
+	const valid = `{"id":"cli:worktree:create","result":{"type":"worktree_created","workspace":{"workspace_id":"w1"},"worktree":{"path":"/worktrees/repo/feature","branch":"feature","is_linked_worktree":true}}}`
+	path, err := parseWorktreeCreated([]byte(valid))
+	if err != nil || path != "/worktrees/repo/feature" {
+		t.Fatalf("스키마의 생성 경로: %q, %v", path, err)
+	}
+	for _, raw := range []string{`{}`, `{"result":{"type":"worktree_created","worktree":{}}}`, `{"result":{"type":"worktree_opened","worktree":{"path":"/x"}}}`, `not json`} {
+		if _, err := parseWorktreeCreated([]byte(raw)); err == nil {
+			t.Fatalf("생성 결과가 아닌 응답을 거절해야 한다: %s", raw)
+		}
+	}
+}
+
+func TestWorktreeCreateUsesMutationTimeout(t *testing.T) {
+	t.Setenv(fakeHerdrDelayEnv, "300")
+	t.Setenv(fakeHerdrResponseEnv, `{"result":{"type":"worktree_created","worktree":{"path":"/new"}}}`)
+	c := &Client{Binary: os.Args[0], Timeout: 50 * time.Millisecond}
+	path, err := c.WorktreeCreate(context.Background(), "w1", "", "feature", "origin/main")
+	if err != nil || path != "/new" {
+		t.Fatalf("체크아웃은 조회보다 오래 걸려도 완료를 기다린다: %q, %v", path, err)
 	}
 }

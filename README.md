@@ -28,6 +28,7 @@ herdr는 사이드바에 앞뒤 커밋 수를 그린다. 그런데 그 숫자는
    (`$gone`, `$merged`)와 따라잡을 때 충돌하는지(`$catchup`)를 함께 보고한다.
 3. 새로 만든 worktree를 원격의 최신 상태로 맞춘다.
 4. 한 저장소의 worktree 전부를 판정과 함께 표로 보이고, 끝난 것을 지우는 [worktree 화면](#worktree-화면)을 연다.
+5. [생성 팝업](#생성-팝업)에서 최신 원격 후보를 비교하고 새 worktree의 기준 브랜치를 고른다.
 
 두 번째가 필요한 이유가 있다. herdr는 같은 저장소를 공유하는 워크스페이스들을 묶어서 들여쓰는데,
 **들여쓴 행에서는 내장 `branch`와 `git_status` 토큰을 지운다.** worktree를 여러 개 열어 두고 쓰는
@@ -246,6 +247,41 @@ worktree를 열 개 넘게 열어 두면 어느 것이 끝난 작업인지 사�
 
 윈도우에서는 교차 컴파일까지만 확인했다. 콘솔 raw 모드와 팝업 pane 의 상대 경로 명령은 실측하지 못했다.
 
+## 생성 팝업
+
+`herdr-git-upstream new-worktree [--cwd <path>]`는 새 worktree의 기준 브랜치를 고르는 화면이다.
+herdr 기본 팝업은 현재 HEAD에서 시작하지만, 이 팝업에서는 현재 브랜치, 그 upstream, 원격 기본
+브랜치, 저장소에 설정한 통합 브랜치를 순서대로 보여 준다. 같은 참조는 한 번만 나온다.
+
+`herdr plugin action invoke new-worktree --plugin git-upstream`으로 herdr pane에 열 수 있다.
+키로 사용하려면 `setup` 출력의 `git-upstream.new-worktree` 주석 블록을 활성화한다. 기본 키는
+바꾸지 않는다. 생성에는 실행 중인 herdr가 필요하다.
+
+이름은 기준 브랜치에서 가져오되 로컬 브랜치, 원격 추적 브랜치, worktree에서 쓰는 이름을 피한다.
+이미 사용 중이면 `-2`, `-3` 순으로 찾는다. `feature-2` 다음 후보는 `feature-3`이다.
+처음에는 자동 이름 전체가 선택되어 있어 바로 타이핑해 바꿀 수 있다. 이름을 직접 고친 뒤에는
+기준을 바꿔도 입력을 덮어쓰지 않는다.
+
+| 키 | 동작 |
+| --- | --- |
+| `Tab` | 이름 칸과 기준 목록 전환 |
+| `↑` `↓` | 기준 목록에서 선택 이동 |
+| 문자·`Backspace` | 이름 입력·수정 |
+| `Enter` | 선택한 기준으로 생성 |
+| `Esc` `Ctrl-C` | 취소 |
+
+원격 후보는 화면을 연 뒤 좁게 fetch하며, 기다리는 동안에도 이름과 기준을 고를 수 있다.
+선택한 원격 후보를 가져오기 전에는 생성하지 않는다. fetch가 실패했다면 팝업을 다시 열어 재시도한다.
+경로는 `[worktrees] directory` 아래의 저장소 이름과 herdr 슬러그 규칙으로 미리 보여 준다.
+실제 위치는 `--path`를 지정하지 않고 herdr가 결정한다.
+
+원격 추적 참조에서 **새 브랜치**를 만들었으면 자동으로 설정된 upstream을 해제한다. 그렇지 않으면
+`git pull`과 사이드바 숫자가 기능 브랜치 대신 main 같은 기준 브랜치를 계속 따라가기 때문이다.
+첫 push에서 upstream을 설정하면 토큰이 다시 나타난다. 기존 브랜치 이름을 직접 입력한 경우에는
+herdr가 그 브랜치를 열고, 기존 upstream 설정을 보존한다. 명시적으로 선택한 원격 기준과 기존
+브랜치는 자동 최신화 훅으로 옮기지 않는다. 이전에 완료된 생성의 이름을 새 현재 브랜치 기준으로 다시 쓰면
+일반 자동 최신화 흐름을 따른다.
+
 ## 동작 방식
 
 ```
@@ -373,9 +409,11 @@ herdr plugin action invoke stop      --plugin git-upstream # 데몬 중지
 ./bin/herdr-git-upstream refresh
 ./bin/herdr-git-upstream worktrees             # worktree 화면을 지금 페인에 그린다 (--cwd <path> 로 저장소를 고른다)
 ./bin/herdr-git-upstream open-worktrees        # worktree 화면을 herdr 팝업 pane 으로 연다 (액션이 부르는 명령)
+./bin/herdr-git-upstream new-worktree          # 기준 브랜치를 고르는 생성 팝업 (--cwd <path> 가능)
+./bin/herdr-git-upstream open-new-worktree     # 생성 팝업을 herdr pane 으로 연다
 ```
 
-`worktrees`는 표준 입출력이 터미널이어야 한다. 파이프 뒤에서는 종료 코드 2로 끝난다.
+`worktrees`와 `new-worktree`는 표준 입출력이 터미널이어야 한다. 파이프 뒤에서는 종료 코드 2로 끝난다.
 
 ## 문제를 살펴볼 때
 

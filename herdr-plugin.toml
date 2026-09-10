@@ -50,6 +50,22 @@ width = "90%"
 height = "80%"
 command = ["./bin/herdr-git-upstream", "worktrees"]
 
+# 기준 후보를 고르는 생성 팝업은 setup 의 주석 처리된 키를 통해 선택적으로 사용한다.
+[[panes]]
+id = "new-worktree"
+title = "New worktree"
+placement = "popup"
+width = "64"
+height = "18"
+command = ["./bin/herdr-git-upstream", "new-worktree"]
+
+[[actions]]
+id = "new-worktree"
+title = "Git Upstream: new worktree"
+description = "Choose a base branch and create a worktree from a fresh remote-tracking ref."
+contexts = ["global", "workspace"]
+command = ["./bin/herdr-git-upstream", "open-new-worktree"]
+
 # herdr 에는 액션을 골라 실행하는 화면이 없어서 이 액션은 키에 묶어야 보인다(setup 명령이 그 설정을 내놓는다).
 # contexts 는 herdr 가 아직 쓰지 않지만, 워크스페이스 문맥에서 열리면 HERDR_WORKSPACE_ID 가 그 저장소를 정한다.
 [[actions]]

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"herdr-git-upstream/internal/config"
+	"herdr-git-upstream/internal/gitrepo"
+	"herdr-git-upstream/internal/state"
 )
 
 // herdr는 원본 체크아웃의 HEAD를 기준으로 worktree를 만들고 fetch는 하지 않는다.
@@ -348,4 +351,76 @@ func readFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(raw)
+}
+
+// 원격 release를 고른 팝업이나 기존 브랜치 열기는 같은 HEAD의 main을 따라 앞으로 감으면 안 된다.
+func TestPopupCreationPreservesChosenBaseAndExistingBranch(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("existing=%v", existing), func(t *testing.T) {
+			fixture := newFixture(t)
+			t.Setenv("HERDR_PLUGIN_STATE_DIR", filepath.Join(fixture.base, "state"))
+			git := gitrepo.Runner{}
+			repo, err := git.Discover(context.Background(), fixture.work)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run(t, fixture.seed, "git", "push", "--quiet", "origin", "main:release")
+			run(t, fixture.work, "git", "fetch", "--quiet", "origin")
+			fixture.advanceRemote(t, "B")
+			if existing {
+				run(t, fixture.work, "git", "branch", "--track", "chosen", "origin/release")
+			}
+			// 기록은 생성 전에 존재해야 한다. 이벤트가 API 응답보다 먼저 실행되어도 보호한다.
+			if err := SuppressCreation(state.New(), repo, "chosen"); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(fixture.base, "chosen")
+			if existing {
+				run(t, fixture.work, "git", "worktree", "add", "--quiet", path, "chosen")
+			} else {
+				run(t, fixture.work, "git", "worktree", "add", "--quiet", "-b", "chosen", path, "refs/remotes/origin/release")
+				run(t, path, "git", "branch", "--unset-upstream")
+			}
+			before := fixture.commitAt(t, path)
+			if _, err := fixture.attempt(t, path, "chosen"); !errors.Is(err, ErrSkipped) {
+				t.Fatalf("선택 기준 보호: %v", err)
+			}
+			if got := fixture.commitAt(t, path); got != before {
+				t.Fatalf("main의 최신 커밋으로 이동하면 안 된다: %s -> %s", before, got)
+			}
+			if existing {
+				if up := output(t, path, "git", "rev-parse", "--abbrev-ref", "@{upstream}"); up != "origin/release" {
+					t.Fatalf("기존 upstream 보존: %s", up)
+				}
+			}
+			// 느리게 도착하거나 중복된 이벤트도 응답 후 보호 기록을 읽을 수 있다.
+			if _, err := fixture.attempt(t, path, "chosen"); !errors.Is(err, ErrSkipped) {
+				t.Fatalf("지연된 이벤트 보호: %v", err)
+			}
+		})
+	}
+}
+
+func TestCurrentCreationCanReuseFinishedPopupName(t *testing.T) {
+	fixture := newFixture(t)
+	t.Setenv("HERDR_PLUGIN_STATE_DIR", filepath.Join(fixture.base, "state"))
+	repo, err := (gitrepo.Runner{}).Discover(context.Background(), fixture.work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SuppressCreation(state.New(), repo, "feature"); err != nil {
+		t.Fatal(err)
+	}
+	if err := CompleteCreation(state.New(), repo, "feature"); err != nil {
+		t.Fatal(err)
+	}
+	if err := AllowCreation(state.New(), repo, "feature"); err != nil {
+		t.Fatal(err)
+	}
+	fixture.advanceRemote(t, "B")
+	path := fixture.addWorktree(t, "feature")
+	result := fixture.run(t, path, "feature")
+	if !result.Moved || fixture.commitAt(t, path) != fixture.remoteTip(t) {
+		t.Fatal("완료된 이름의 Current 재사용은 정상 최신화해야 한다")
+	}
 }

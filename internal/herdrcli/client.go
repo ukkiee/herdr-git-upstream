@@ -239,6 +239,48 @@ func (c *Client) WorktreeOpen(ctx context.Context, path string) error {
 	return err
 }
 
+// WorktreeCreate는 선택한 기준으로 worktree를 만들고 그 워크스페이스로 이동한다.
+// --path를 보내지 않아 herdr의 worktree 디렉터리 설정을 따른다. 큰 저장소 체크아웃은 조회보다 오래 걸린다.
+func (c *Client) WorktreeCreate(ctx context.Context, workspaceID, cwd, branch, base string) (string, error) {
+	if branch == "" || base == "" {
+		return "", fmt.Errorf("브랜치 이름과 기준 참조가 모두 있어야 한다")
+	}
+	const createTimeout = 60 * time.Second
+	out, err := c.runWithTimeout(ctx, createTimeout, worktreeCreateArgs(workspaceID, cwd, branch, base)...)
+	if err != nil {
+		return "", err
+	}
+	return parseWorktreeCreated(out)
+}
+
+func worktreeCreateArgs(workspaceID, cwd, branch, base string) []string {
+	args := []string{"worktree", "create", "--branch", branch, "--base", base, "--focus"}
+	if workspaceID != "" {
+		return append(args, "--workspace", workspaceID)
+	}
+	if cwd != "" {
+		return append(args, "--cwd", cwd)
+	}
+	return args
+}
+
+// herdr 0.9.0의 api schema --json: worktree_created 응답은 result.worktree.path를 제공한다.
+func parseWorktreeCreated(out []byte) (string, error) {
+	var parsed struct {
+		Result struct {
+			Type     string       `json:"type"`
+			Worktree WorktreeItem `json:"worktree"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return "", fmt.Errorf("worktree create 응답을 해석하지 못했다: %w", err)
+	}
+	if parsed.Result.Type != "worktree_created" || parsed.Result.Worktree.Path == "" {
+		return "", fmt.Errorf("worktree create가 끝났지만 생성 경로를 확인하지 못했다")
+	}
+	return parsed.Result.Worktree.Path, nil
+}
+
 // WorkspaceFocus는 이미 열려 있는 워크스페이스로 옮겨 간다.
 func (c *Client) WorkspaceFocus(ctx context.Context, id string) error {
 	if id == "" {
