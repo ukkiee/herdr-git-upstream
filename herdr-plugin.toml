@@ -55,8 +55,8 @@ command = ["./bin/herdr-git-upstream", "worktrees"]
 id = "new-worktree"
 title = "New worktree"
 placement = "popup"
-width = "64"
-height = "18"
+width = 64
+height = 18
 command = ["./bin/herdr-git-upstream", "new-worktree"]
 
 [[actions]]

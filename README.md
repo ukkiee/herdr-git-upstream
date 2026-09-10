@@ -62,8 +62,12 @@ herdr plugin install <owner>/herdr-git-upstream
 For local development, link your checkout:
 
 ```sh
+sh scripts/build.sh
 herdr plugin link /Users/ukyi/personal/herdr-git-upstream
 ```
+
+`plugin link` does not run the build hook. Build from the repository root before linking; on Windows,
+use `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1` instead of the shell script.
 
 Requires herdr 0.7.5 or later, Go 1.24 or later, and Git 2.31 or later. herdr runs `go build` once during
 installation. The plugin uses only the standard library, so there are no dependencies to download.
@@ -264,7 +268,9 @@ panes have not been tested at runtime.
 `herdr-git-upstream new-worktree [--cwd <path>]` opens a screen for choosing a new worktree's base branch.
 herdr's built-in popup starts from the current HEAD. This popup lists the current branch, its upstream,
 the remote default branch, and the repository's configured integration branches, in that order.
-Each distinct ref appears once.
+Each distinct ref appears once. `Base` starts collapsed: press `Tab` to focus it, then `Enter` to
+open the dropdown. Use `↑`/`↓` and `Enter` to confirm a base. Return to the branch-name field with `Tab`
+and press `Enter` to create. Browsing the dropdown does not change the confirmed base or suggested name.
 
 Use `herdr plugin action invoke new-worktree --plugin git-upstream` to open it in a herdr pane.
 Creation requires a running herdr server.
@@ -291,11 +297,12 @@ Once you edit the name, changing the base no longer overwrites your input.
 
 | Key | Action |
 | --- | --- |
-| `Tab` | Switch between the name field and base list |
-| `↑` `↓` | Move the selection in the base list |
+| `Tab` | Switch between the name and base fields; discard an open menu |
+| `↑` `↓` | Move the highlight in the open base dropdown |
 | Characters and `Backspace` | Enter or edit the name |
-| `Enter` | Create from the selected base |
-| `Esc` `Ctrl-C` | Cancel |
+| `Enter` | Name field: create. Base field: open dropdown. Open dropdown: confirm the highlighted base |
+| `Esc` | Close the dropdown first; when closed, cancel the popup |
+| `Ctrl-C` | Cancel the popup |
 
 Remote candidates are fetched individually after the popup opens. You can edit the name and choose a
 base while waiting. Creation waits for the selected remote candidate to finish fetching. If its fetch

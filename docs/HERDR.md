@@ -133,6 +133,13 @@ herdr는 동시에 도는 플러그인 명령을 32개로 제한한다(`src/app/
 포커스 이벤트처럼 자주 발화하는 훅이 네트워크를 타면 그 자리를 오래 차지해 다른 플러그인의 훅까지
 밀린다. **이벤트 훅은 즉시 끝나야 한다.**
 
+### 로컬 link는 빌드하지 않는다
+
+`plugin link`는 manifest를 등록할 뿐 build 훅을 실행하지 않는다. 온라인·오프라인 경로 모두
+동일하다(`src/cli/plugin.rs:48-85,1099-1105`, `src/app/api/plugins/mod.rs:68-87`). 로컬에서는
+먼저 빌드해야 하며, 설치의 build 실행은 `src/cli/plugin.rs:210`에 있다.
+2026-09-10 link 직후 기존 0.1.0 바이너리가 남아 있음을 확인하고 빌드 후 0.2.0을 검증했다.
+
 ### startup 훅은 일회성이며 link/enable 때 발화하지 않는다
 
 서버가 세션을 복구할 때와 live handoff 때만 부른다(`src/app/api/plugins/runtime.rs:183`).
@@ -182,7 +189,13 @@ herdr plugin pane open --plugin <id> --entrypoint <pane-id> --focus
 CLI의 `--placement`는 `overlay|split|tab|zoomed`만 받으며 `popup`은 받지 않는다.
 매니페스트의 `[[panes]]`에는 `placement = "popup"`과 `width`/`height`가 있다.
 소스는 옵션이 없으면 매니페스트 값을 쓴다(`src/app/api/plugins/mod.rs:467`).
-실제 popup 표시는 연결 후 실측할 항목으로 남긴다.
+2026-09-10 연결 후 `--placement` 없는 호출이 popup을 여는 것을 확인했고 사용자가 실제
+팝업 화면도 확인했다. popup은 일반 pane 목록에 나타나지 않으며 열기 응답도 pane ID 없이
+`result.type = "ok"`다(`src/app/api/plugins/panes.rs:11-43`). 같은 TUI의 키 입력 검증에는
+ID를 돌려주는 `--placement tab`을 사용했다.
+
+고정 크기는 `width = 64`, `height = 18`처럼 정수 셀 수로 쓴다. 문자열은 `"90%"`처럼
+백분율만 허용하며 `"64"`는 manifest 읽기 단계에서 거절된다(`src/popup_size.rs:36-40,118-140`).
 
 ### 매니페스트가 지원하는 것
 
@@ -268,4 +281,5 @@ herdr는 워크스페이스가 어느 디렉터리에 속하는지를 첫 탭의
 
 위 경로와 행 번호는 [herdr v0.9.0](https://github.com/herdrdev/herdr/tree/v0.9.0)
 (`b99002ac99b09e00b4ca692436cb15a6b0d676f1`) 기준이다. CLI 옵션과 오류 봉투는 같은 버전의
-설치된 실행 파일로 2026-09-10 확인했다. 플러그인 연결 후 UI 실측 결과는 별도로 기록한다.
+설치된 실행 파일로 2026-09-10 확인했다. 플러그인 연결 후 UI 실측 결과는
+[0.2.0 검증 기록](reviews/0.2.0-verification.md)에 기록했다.

@@ -49,10 +49,11 @@ worktree 삭제는 경계에 걸쳐 있다. herdr-shear가 이미 잘하지만 �
 | 4. 기준 브랜치를 고르는 생성 팝업 | 완료 (`4dcf54c`) |
 | 영문·한국어 README, 0.2.0 문서 정리 | 완료 |
 | 전체 교차 기능 검토 | 완료. [검토 기록](reviews/0.2.0-verification.md) |
-| herdr 연결 실측 | 다음 단계. 사용자 설정 적용은 수동 |
+| herdr 연결 실측 | 연결·팝업·임시 저장소 생성/삭제 확인. 사용자 설정 적용과 사이드바 시각 확인은 남음 |
 
 2026-09-10 현재 전체 13개 패키지의 race 시험, vet, 여섯 플랫폼(linux/darwin/windows × amd64/arm64)
-교차 컴파일과 매니페스트 TOML 검사를 통과했다. Windows 실행은 미실측이다. 아직 herdr 에 붙이지 않았다.
+교차 컴파일과 매니페스트 TOML 검사를 통과했다. herdr 0.9.0에 0.2.0을 연결해 실행했다.
+Windows 실행은 미실측이며 사용자 config.toml은 수정하지 않았다. 자세한 범위는 검토 기록에 남긴다.
 
 ```
 cmd/herdr-git-upstream/   명령 진입점
@@ -312,11 +313,9 @@ worktree 를 세는 일은 herdr 와 무관한 자리에서 하는 편이 맞다
 │  Branch  [widget-studio/dev-2]                         │
 │  Path    ~/.herdr/worktrees/mfe/widget-studio-dev-2    │
 │                                                        │
-│  Base                                                  │
-│  ▸ widget-studio/dev              current · ↓3 behind  │
-│    origin/widget-studio/dev       upstream · up to date│
-│    origin/main                    default · up to date │
-│    origin/widget-studio/dev       merge target         │
+│  Base  [widget-studio/dev · current                  ▾] │
+│                                                        │
+│  Enter 로 후보를 펼치고 ↑↓ 로 이동한 뒤 Enter 로 확정   │
 │                                                        │
 │  Tab switch · Enter create · Esc cancel                │
 └────────────────────────────────────────────────────────┘
@@ -333,7 +332,10 @@ worktree 를 세는 일은 herdr 와 무관한 자리에서 하는 편이 맞다
   겹치면 `-2`, `-3` 으로 넘어간다. 로컬 브랜치, 원격 추적 참조, 열려 있는 worktree 셋을 모두 보고
   빈 번호를 찾는다
 - 기준의 기본 선택은 현재 브랜치. 뒤처져 있어도 생성 직후 자동 최신화가 앞당긴다
-- 기준을 바꾸면 이름과 경로가 따라오되, 이름을 한 글자라도 직접 고친 뒤에는 덮어쓰지 않는다
+- 기준은 접힌 선택 필드에서 고른다. `Tab`으로 Base에 이동하고 `Enter`로 드롭다운을 열며,
+  `↑`/`↓`로 둘러보고 `Enter`로 확정한다. `Esc`는 드롭다운부터 닫는다. 이름 칸의 `Enter`는 생성한다.
+  2026-09-10 사용자 실측 피드백에 따라 항상 펼친 목록을 이 방식으로 바꿨다
+- 기준을 확정하면 이름과 경로가 따라오되, 이름을 한 글자라도 직접 고친 뒤에는 덮어쓰지 않는다
 - 경로 미리보기는 `<[worktrees] directory>/<저장소 이름>/<슬러그>` 다. 뿌리는 config.toml 을
   `internal/herdrconfig` 로 훑어 읽고, 없으면 `~/.herdr/worktrees`. 슬러그는 herdr 의
   `branch_to_path_slug` 규칙(영숫자는 소문자로, 나머지는 대시 하나로, 앞뒤 대시 제거)을 그대로 옮긴다

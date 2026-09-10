@@ -112,6 +112,14 @@ func (c Candidate) nameRef() string {
 	return c.Ref
 }
 
+func (c Candidate) detail() string {
+	detail := c.Kind.String()
+	if c.Status != "" {
+		detail += " · " + c.Status
+	}
+	return detail
+}
+
 type FocusArea int
 
 const (
@@ -127,9 +135,13 @@ type CreateModel struct {
 	PathRoot     string
 	Candidates   []Candidate
 	Selected     int
-	Focus        FocusArea
-	Message      string
-	Busy         bool
+	MenuOpen     bool
+	MenuIndex    int
+	// MenuRef keeps the highlight on the same candidate when async lookup inserts a row.
+	MenuRef string
+	Focus   FocusArea
+	Message string
+	Busy    bool
 	// Taken은 자동 이름을 고를 때 보는 읽기 전용 집합이다. 갱신할 때는 새 집합으로 바꾼다.
 	Taken map[string]bool
 }
@@ -150,6 +162,14 @@ func (m CreateModel) base() (Candidate, bool) {
 }
 
 func (m CreateModel) autoName() CreateModel {
+	if m.MenuOpen {
+		if index, ok := m.menuIndex(); ok {
+			m.MenuIndex = index
+		} else {
+			m.MenuOpen = false
+			m.Message = "base list changed; reopen Base"
+		}
+	}
 	if m.UserEdited {
 		return m
 	}
@@ -163,6 +183,10 @@ func (m CreateModel) autoName() CreateModel {
 // UpdateCreate는 순수 키 처리다. 외부 생성은 컨트롤러만 실행하고, 생성 중 취소도 컨트롤러에 알려
 // 생성 결과와 upstream 정리가 끝난 뒤 닫도록 한다.
 func UpdateCreate(m CreateModel, k tui.Key) (CreateModel, CreateAction) {
+	if k.Kind == tui.KeyEsc && m.MenuOpen && !m.Busy {
+		m.MenuOpen = false
+		return m, CreateNone
+	}
 	if k.Kind == tui.KeyEsc || k.Kind == tui.KeyCtrlC {
 		return m, CreateCancel
 	}
@@ -172,12 +196,30 @@ func UpdateCreate(m CreateModel, k tui.Key) (CreateModel, CreateAction) {
 	m.Message = ""
 	switch k.Kind {
 	case tui.KeyTab:
+		m.MenuOpen = false
 		if m.Focus == FocusName {
 			m.Focus = FocusBase
 		} else {
 			m.Focus = FocusName
 		}
 	case tui.KeyEnter:
+		if m.Focus == FocusBase {
+			if m.MenuOpen {
+				m.MenuOpen = false
+				index, ok := m.menuIndex()
+				if !ok {
+					m.Message = "base list changed; choose again"
+					return m, CreateNone
+				}
+				m.Selected = index
+				m = m.autoName()
+			} else if base, ok := m.base(); ok {
+				m.MenuOpen, m.MenuIndex, m.MenuRef = true, m.Selected, base.Ref
+			} else {
+				m.Message = "no base branch available"
+			}
+			return m, CreateNone
+		}
 		if strings.TrimSpace(m.Name) == "" {
 			m.Message = "enter a branch name"
 			return m, CreateNone
@@ -215,17 +257,30 @@ func UpdateCreate(m CreateModel, k tui.Key) (CreateModel, CreateAction) {
 			m.NameSelected, m.UserEdited = false, true
 		}
 	case tui.KeyUp, tui.KeyDown:
-		if m.Focus == FocusBase && len(m.Candidates) > 0 {
-			if k.Kind == tui.KeyUp {
-				m.Selected--
-			} else {
-				m.Selected++
+		if m.Focus == FocusBase && m.MenuOpen && len(m.Candidates) > 0 {
+			index, ok := m.menuIndex()
+			if !ok {
+				index = m.Selected
 			}
-			m.Selected = max(0, min(m.Selected, len(m.Candidates)-1))
-			m = m.autoName()
+			if k.Kind == tui.KeyUp {
+				index--
+			} else {
+				index++
+			}
+			m.MenuIndex = max(0, min(index, len(m.Candidates)-1))
+			m.MenuRef = m.Candidates[m.MenuIndex].Ref
 		}
 	}
 	return m, CreateNone
+}
+
+func (m CreateModel) menuIndex() (int, bool) {
+	for i, candidate := range m.Candidates {
+		if candidate.Ref == m.MenuRef {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // RenderCreate는 화면 가운데 테두리 상자를 그린다. 작은 창에서는 후보 목록을 줄여 선택 행과 키 안내를 남긴다.
@@ -240,7 +295,6 @@ func RenderCreate(m CreateModel, cols, rows int) []string {
 	}
 	width := min(cols, 64)
 	inside := width - 2
-	visible := min(len(m.Candidates), max(0, rows-10))
 	name := m.Name
 	if name == "" {
 		name = " "
@@ -248,40 +302,73 @@ func RenderCreate(m CreateModel, cols, rows int) []string {
 	if m.Focus == FocusName && m.NameSelected {
 		name = tui.Reverse(name)
 	}
-	content := []string{"", " Branch  [" + name + "]", " Path    " + PathPreview(m.PathRoot, m.RepoName, m.Name), "", " Base"}
-	offset := max(0, m.Selected-visible+1)
-	for i := offset; i < len(m.Candidates) && i < offset+visible; i++ {
-		c := m.Candidates[i]
-		marker := "  "
-		if i == m.Selected {
-			marker = "▸ "
-		}
-		label := padRight(tui.Truncate(c.Label, 28), 28)
-		detail := c.Kind.String()
-		if c.Status != "" {
-			detail += " · " + c.Status
-		}
-		line := " " + marker + label + "  " + detail
-		if i == m.Selected && m.Focus == FocusBase {
-			line = tui.Reverse(padRight(tui.Truncate(line, inside), inside))
-		}
-		content = append(content, line)
+	base, available := m.base()
+	label, detail := "no base branch available", ""
+	if available {
+		label, detail = base.Label, base.detail()
 	}
-	if visible == 0 {
-		content = append(content, " no base branch available")
+	chevron := "▾"
+	if m.MenuOpen {
+		chevron = "▴"
+	}
+	fieldWidth := max(0, inside-13)
+	field := "[" + padRight(tui.Truncate(label, fieldWidth), fieldWidth) + " " + chevron + "]"
+	if m.Focus == FocusBase && !m.MenuOpen {
+		field = tui.Reverse(field)
+	}
+	content := []string{"", " Branch  [" + name + "]", " Path    " + PathPreview(m.PathRoot, m.RepoName, m.Name), "", " Base    " + field}
+	if m.MenuOpen {
+		visible := min(len(m.Candidates), max(0, rows-11))
+		index, found := m.menuIndex()
+		if !found {
+			index = min(m.Selected, max(0, len(m.Candidates)-1))
+		}
+		offset := max(0, index-visible+1)
+		menuWidth := max(0, inside-11)
+		indent := strings.Repeat(" ", 9)
+		content = append(content, indent+"┌"+strings.Repeat("─", menuWidth)+"┐")
+		for i := offset; i < len(m.Candidates) && i < offset+visible; i++ {
+			candidate := m.Candidates[i]
+			marker := "  "
+			if found && i == index {
+				marker = "▸ "
+			}
+			minimumLabel := max(0, min(12, menuWidth-4))
+			labelWidth := min(26, max(minimumLabel, menuWidth-tui.Width(candidate.detail())-4))
+			line := marker + padRight(tui.Truncate(candidate.Label, labelWidth), labelWidth) + "  " + candidate.detail()
+			line = padRight(tui.Truncate(line, menuWidth), menuWidth)
+			if found && i == index {
+				line = tui.Reverse(line)
+			}
+			content = append(content, indent+"│"+line+"│")
+		}
+		content = append(content, indent+"└"+strings.Repeat("─", menuWidth)+"┘")
+	} else {
+		content = append(content, "         "+detail)
 	}
 	message := m.Message
 	if m.Busy && message == "" {
 		message = "creating…"
 	}
-	content = append(content, " "+message, " Tab switch · Enter create · Esc cancel")
+	footer := " Tab switch · Enter create · Esc cancel"
+	if m.Focus == FocusBase {
+		footer = " Tab switch · Enter open · Esc cancel"
+	}
+	if m.MenuOpen {
+		footer = " ↑↓ move · Enter select · Esc close · Tab name"
+	}
+	if m.Busy {
+		footer = " Creating… · Esc waits for completion"
+	}
+	content = append(content, " "+message, footer)
 	if len(content) > rows-2 {
 		content = append(content[:rows-3], content[len(content)-1])
 	}
-	title := " New worktree "
-	repo := " " + m.RepoName + " "
+	title := tui.Truncate(" New worktree ", inside)
+	repoWidth := max(0, inside-tui.Width(title))
+	repo := tui.Truncate(" "+m.RepoName+" ", repoWidth)
 	top := "┌" + title + strings.Repeat("─", max(0, inside-tui.Width(title)-tui.Width(repo))) + repo + "┐"
-	box := []string{tui.Truncate(top, width)}
+	box := []string{top}
 	for _, line := range content {
 		box = append(box, "│"+padRight(tui.Truncate(line, inside), inside)+"│")
 	}

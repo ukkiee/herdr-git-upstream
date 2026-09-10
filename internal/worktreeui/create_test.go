@@ -72,8 +72,8 @@ func TestUpdateCreate(t *testing.T) {
 	}{
 		{"typing replaces selection", []tui.Key{key('x')}, "x", true, 0, FocusName, CreateNone},
 		{"backspace removes selection", []tui.Key{{Kind: tui.KeyBackspace}}, "", true, 0, FocusName, CreateNone},
-		{"base changes automatic name", []tui.Key{{Kind: tui.KeyTab}, {Kind: tui.KeyDown}}, "main-2", false, 1, FocusBase, CreateNone},
-		{"edited name stays", []tui.Key{key('x'), {Kind: tui.KeyTab}, {Kind: tui.KeyDown}}, "x", true, 1, FocusBase, CreateNone},
+		{"base changes automatic name", []tui.Key{{Kind: tui.KeyTab}, {Kind: tui.KeyEnter}, {Kind: tui.KeyDown}, {Kind: tui.KeyEnter}}, "main-2", false, 1, FocusBase, CreateNone},
+		{"edited name stays", []tui.Key{key('x'), {Kind: tui.KeyTab}, {Kind: tui.KeyEnter}, {Kind: tui.KeyDown}, {Kind: tui.KeyEnter}}, "x", true, 1, FocusBase, CreateNone},
 		{"tab back", []tui.Key{{Kind: tui.KeyTab}, {Kind: tui.KeyTab}}, "widget-studio/dev-2", false, 0, FocusName, CreateNone},
 		{"submit", []tui.Key{{Kind: tui.KeyEnter}}, "widget-studio/dev-2", false, 0, FocusName, CreateSubmit},
 		{"cancel", []tui.Key{{Kind: tui.KeyEsc}}, "widget-studio/dev-2", false, 0, FocusName, CreateCancel},
@@ -109,6 +109,99 @@ func TestUpdateCreate(t *testing.T) {
 	}
 }
 
+func TestUpdateCreateDropdownDefersSelection(t *testing.T) {
+	m := createSample()
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyTab})
+	m, action := UpdateCreate(m, tui.Key{Kind: tui.KeyEnter})
+	if action != CreateNone || !m.MenuOpen {
+		t.Fatalf("Base Enter must open the menu: %+v %v", m, action)
+	}
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyDown})
+	if m.Selected != 0 || m.Name != "widget-studio/dev-2" || m.MenuIndex != 1 {
+		t.Fatalf("highlight changed committed base/name: %+v", m)
+	}
+	m, action = UpdateCreate(m, tui.Key{Kind: tui.KeyEsc})
+	if action != CreateNone || m.MenuOpen || m.Selected != 0 {
+		t.Fatalf("Esc must discard menu selection only: %+v %v", m, action)
+	}
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyEnter})
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyDown})
+	m, action = UpdateCreate(m, tui.Key{Kind: tui.KeyEnter})
+	if action != CreateNone || m.MenuOpen || m.Selected != 1 || m.Name != "main-2" {
+		t.Fatalf("Enter must commit only the highlighted base: %+v %v", m, action)
+	}
+	m.Candidates[1].Status = "up to date"
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyTab})
+	if _, action = UpdateCreate(m, tui.Key{Kind: tui.KeyEnter}); action != CreateSubmit {
+		t.Fatal("Name Enter must still create")
+	}
+	if _, action = UpdateCreate(m, tui.Key{Kind: tui.KeyEsc}); action != CreateCancel {
+		t.Fatal("Esc with closed menu must cancel popup")
+	}
+}
+
+func TestCreateDropdownReconcilesFetchResults(t *testing.T) {
+	for _, edited := range []bool{false, true} {
+		t.Run(map[bool]string{false: "automatic name", true: "edited name"}[edited], func(t *testing.T) {
+			m := createSample()
+			m.UserEdited = edited
+			m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyTab})
+			m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyEnter})
+			m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyDown})
+			chosen := m.Candidates[1]
+			chosen.Status = "up to date"
+			// A completed default lookup inserts another candidate before the highlight.
+			m.Candidates = []Candidate{m.Candidates[0], {Label: "origin/develop", Ref: "refs/remotes/origin/develop", Kind: CandidateDefault}, chosen}
+			m.Taken = map[string]bool{"widget-studio/dev": true, "main": true, "main-2": true}
+			m = m.autoName()
+			if m.MenuIndex != 2 || m.Selected != 0 || m.Name != "widget-studio/dev-2" {
+				t.Fatalf("fetch changed committed base or lost highlight: %+v", m)
+			}
+			m, action := UpdateCreate(m, tui.Key{Kind: tui.KeyEnter})
+			wantName := "main-3"
+			if edited {
+				wantName = "widget-studio/dev-2"
+			}
+			if action != CreateNone || m.MenuOpen || m.Candidates[m.Selected].Ref != chosen.Ref || m.Name != wantName {
+				t.Fatalf("Enter committed a stale index: %+v %v", m, action)
+			}
+			m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyEnter})
+			m.Candidates = m.Candidates[:1]
+			m.Selected = 0
+			m = m.autoName()
+			if m.MenuOpen || m.Message == "" {
+				t.Fatalf("removed highlighted ref must close menu with a message: %+v", m)
+			}
+		})
+	}
+}
+
+func TestCreateDropdownSingleCandidateAndTab(t *testing.T) {
+	m := createSample()
+	m.Candidates = m.Candidates[:1]
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyTab})
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyEnter})
+	if !m.MenuOpen {
+		t.Fatal("one candidate still opens the dropdown")
+	}
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyDown})
+	if m.MenuIndex != 0 {
+		t.Fatal("single candidate highlight must stay in bounds")
+	}
+	if _, action := UpdateCreate(m, tui.Key{Kind: tui.KeyCtrlC}); action != CreateCancel {
+		t.Fatal("Ctrl-C cancels the popup")
+	}
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyTab})
+	if m.MenuOpen || m.Focus != FocusName || m.Selected != 0 {
+		t.Fatalf("Tab must close menu and focus name: %+v", m)
+	}
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyTab})
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyDown})
+	if m.MenuOpen || m.Selected != 0 {
+		t.Fatal("closed dropdown arrows must not change selection")
+	}
+}
+
 func TestRenderCreate(t *testing.T) {
 	m := createSample()
 	lines := RenderCreate(m, 80, 24)
@@ -116,10 +209,13 @@ func TestRenderCreate(t *testing.T) {
 		t.Fatalf("rows: %d", len(lines))
 	}
 	all := strings.Join(lines, "\n")
-	for _, want := range []string{"New worktree", "mfe", "Branch", "widget-studio/dev-2", "/worktrees/mfe/widget-studio-dev-2", "Base", "current · ↓3 behind", "upstream · fetching…", "Tab switch · Enter create · Esc cancel"} {
+	for _, want := range []string{"New worktree", "mfe", "Branch", "widget-studio/dev-2", "/worktrees/mfe/widget-studio-dev-2", "Base", "current · ↓3 behind", "▾", "Tab switch · Enter create · Esc cancel"} {
 		if !strings.Contains(plain(all), want) {
 			t.Errorf("missing %q in\n%s", want, plain(all))
 		}
+	}
+	if strings.Contains(plain(all), "team/upstream/main") {
+		t.Fatal("collapsed Base must not show other candidates")
 	}
 	if !strings.Contains(all, tui.Reverse(m.Name)) {
 		t.Fatal("selected name must be reversed")
@@ -135,5 +231,45 @@ func TestRenderCreate(t *testing.T) {
 				t.Fatalf("small overflow %v: %q", size, line)
 			}
 		}
+	}
+}
+
+func TestRenderCreateDropdownAndViewport(t *testing.T) {
+	m := createSample()
+	m.RepoName = strings.Repeat("long-repo-", 10)
+	for i := 0; i < 12; i++ {
+		m.Candidates = append(m.Candidates, Candidate{Label: "feature/" + strings.Repeat("long-", 12) + string(rune('a'+i)), Ref: "refs/heads/" + string(rune('a'+i)), Kind: CandidateMergeTarget, Status: "fetching…"})
+	}
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyTab})
+	closed := plain(strings.Join(RenderCreate(m, 62, 16), "\n"))
+	if !strings.Contains(closed, "Enter open") || strings.Contains(closed, "team/upstream/main") {
+		t.Fatalf("closed Base footer/list: %s", closed)
+	}
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyEnter})
+	for i := 0; i < 20; i++ {
+		m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyDown})
+	}
+	for _, size := range [][2]int{{62, 16}, {64, 18}, {32, 12}, {20, 8}} {
+		lines := RenderCreate(m, size[0], size[1])
+		if len(lines) != size[1] {
+			t.Fatalf("row overflow: %v", size)
+		}
+		for _, line := range lines {
+			if tui.Width(line) > size[0] {
+				t.Fatalf("width overflow %v: %q", size, line)
+			}
+		}
+	}
+	open := plain(strings.Join(RenderCreate(m, 62, 16), "\n"))
+	for _, want := range []string{"Enter select", "Esc close", "▴", "▸", "fetching…"} {
+		if !strings.Contains(open, want) {
+			t.Fatalf("missing %q: %s", want, open)
+		}
+	}
+	if !strings.Contains(strings.Join(RenderCreate(m, 62, 16), "\n"), "\x1b[7m") {
+		t.Fatal("highlighted menu candidate must be reversed")
+	}
+	if narrow := plain(strings.Join(RenderCreate(m, 32, 12), "\n")); !strings.Contains(narrow, "feature/") {
+		t.Fatalf("narrow dropdown must retain candidate identity: %s", narrow)
 	}
 }

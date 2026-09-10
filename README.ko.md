@@ -60,8 +60,12 @@ herdr plugin install <owner>/herdr-git-upstream
 로컬에서 개발 중이라면 이렇게 붙인다.
 
 ```sh
+sh scripts/build.sh
 herdr plugin link /Users/ukyi/personal/herdr-git-upstream
 ```
+
+`plugin link`는 빌드 훅을 실행하지 않는다. 저장소 뿌리에서 먼저 빌드한다. Windows에서는 셸 스크립트 대신
+`powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1`을 실행한다.
 
 herdr 0.7.5 이상, Go 1.24 이상, Git 2.31 이상이 필요하다. 설치할 때 herdr가 `go build`를 한 번 돌린다.
 표준 라이브러리만 쓰므로 내려받을 의존성은 없다.
@@ -256,6 +260,9 @@ herdr 안의 셸에도 워크스페이스 ID가 있으므로 `cd` 뒤 다른 저
 `herdr-git-upstream new-worktree [--cwd <path>]`는 새 worktree의 기준 브랜치를 고르는 화면이다.
 herdr 기본 팝업은 현재 HEAD에서 시작하지만, 이 팝업에서는 현재 브랜치, 그 upstream, 원격 기본
 브랜치, 저장소에 설정한 통합 브랜치를 순서대로 보여 준다. 같은 참조는 한 번만 나온다.
+`Base`는 접힌 선택 필드다. `Tab`으로 이동하고 `Enter`로 드롭다운을 연 뒤, `↑`/`↓`와 `Enter`로
+기준을 확정한다. `Tab`으로 이름 칸에 돌아와 `Enter`를 누르면 생성한다. 후보를 둘러보는 동안에는
+확정한 기준과 자동 이름이 바뀌지 않는다.
 
 `herdr plugin action invoke new-worktree --plugin git-upstream`으로 herdr pane에 열 수 있다.
 생성에는 실행 중인 herdr가 필요하다.
@@ -281,11 +288,12 @@ herdr 기본 팝업은 현재 HEAD에서 시작하지만, 이 팝업에서는 �
 
 | 키 | 동작 |
 | --- | --- |
-| `Tab` | 이름 칸과 기준 목록 전환 |
-| `↑` `↓` | 기준 목록에서 선택 이동 |
+| `Tab` | 이름 칸과 기준 필드 전환. 열린 목록의 임시 선택은 취소 |
+| `↑` `↓` | 열린 기준 드롭다운에서 강조 이동 |
 | 문자·`Backspace` | 이름 입력·수정 |
-| `Enter` | 선택한 기준으로 생성 |
-| `Esc` `Ctrl-C` | 취소 |
+| `Enter` | 이름 칸: 생성. 기준 필드: 드롭다운 열기. 열린 드롭다운: 기준 확정 |
+| `Esc` | 드롭다운이 열렸으면 먼저 닫기, 닫혔으면 팝업 취소 |
+| `Ctrl-C` | 팝업 취소 |
 
 원격 후보는 화면을 연 뒤 좁게 fetch하며, 기다리는 동안에도 이름과 기준을 고를 수 있다.
 선택한 원격 후보를 가져오기 전에는 생성하지 않는다. fetch가 실패했다면 팝업을 다시 열어 재시도한다.
