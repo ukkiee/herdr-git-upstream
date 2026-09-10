@@ -38,6 +38,27 @@ command = ["./bin/herdr-git-upstream", "fetch"]
 on = "worktree.created"
 command = ["./bin/herdr-git-upstream", "worktree-created"]
 
+# worktree 화면은 진짜 터미널을 받는 pane 으로 뜬다. placement 는 popup 인데 CLI 의 --placement 목록에는
+# popup 이 없어서, 액션은 placement 를 비운 채 `plugin pane open` 을 불러 이 값을 따르게 한다. 크기는 표 한 줄에
+# 판정·이름·설명 세 열이 들어가고 worktree 스물일곱 개가 한눈에 보이도록 넉넉히 잡았다. 명령이 상대 경로인 것은
+# 다른 항목과 같다. 윈도우에서 상대 경로 pane 명령이 도는지는 미실측이다(docs/PLAN.md).
+[[panes]]
+id = "worktrees"
+title = "Worktrees"
+placement = "popup"
+width = "90%"
+height = "80%"
+command = ["./bin/herdr-git-upstream", "worktrees"]
+
+# herdr 에는 액션을 골라 실행하는 화면이 없어서 이 액션은 키에 묶어야 보인다(setup 명령이 그 설정을 내놓는다).
+# contexts 는 herdr 가 아직 쓰지 않지만, 워크스페이스 문맥에서 열리면 HERDR_WORKSPACE_ID 가 그 저장소를 정한다.
+[[actions]]
+id = "worktrees"
+title = "Git Upstream: worktrees"
+description = "이 저장소의 worktree 전부를 판정(safe/review/keep/blocked)과 함께 보이고 safe 인 것을 지운다."
+contexts = ["global", "workspace"]
+command = ["./bin/herdr-git-upstream", "open-worktrees"]
+
 [[actions]]
 id = "refresh"
 title = "Git Upstream: 지금 모두 갱신"

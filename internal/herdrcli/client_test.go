@@ -2,6 +2,7 @@ package herdrcli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -15,8 +16,13 @@ import (
 // 셸 스크립트 대신 시험 바이너리를 다시 띄우는 이유는 윈도우에서도 같은 시험이 돌아야 하기 때문이다. 이 가짜는
 // 인자를 보지 않고 기다렸다가 빈 응답을 낼 뿐이라, 실행 중인 herdr 서버에는 아무것도 보내지 않는다.
 const fakeHerdrDelayEnv = "HERDR_GIT_UPSTREAM_TEST_FAKE_HERDR_DELAY_MS"
+const fakeHerdrErrorEnv = "HERDR_GIT_UPSTREAM_TEST_FAKE_HERDR_ERROR"
 
 func TestMain(m *testing.M) {
+	if raw := os.Getenv(fakeHerdrErrorEnv); raw != "" {
+		fmt.Fprintln(os.Stderr, raw)
+		os.Exit(1)
+	}
 	if v := os.Getenv(fakeHerdrDelayEnv); v != "" {
 		ms, _ := strconv.Atoi(v)
 		time.Sleep(time.Duration(ms) * time.Millisecond)
@@ -37,6 +43,53 @@ func TestWorktreeRemoveUsesRemoveTimeout(t *testing.T) {
 	}
 	if err := c.WorktreeRemove(context.Background(), "w1"); err != nil {
 		t.Fatalf("삭제는 Timeout 보다 오래 걸려도 removeTimeout 안이면 성공해야 한다: %v", err)
+	}
+}
+
+// herdr 0.9.0 은 거절을 종료 코드 1 과 표준 오류의 JSON 봉투로 알린다.
+func TestRejectedCommandPreservesServerError(t *testing.T) {
+	t.Setenv(fakeHerdrErrorEnv, `{"error":{"code":"workspace_not_found","message":"workspace missing not found"},"id":"cli:worktree:list"}`)
+	c := &Client{Binary: os.Args[0]}
+	_, err := c.WorktreeList(context.Background(), "missing", "")
+	var response *ResponseError
+	if !errors.As(err, &response) || response.Code != "workspace_not_found" {
+		t.Fatalf("표준 오류의 서버 오류 이름이 보존되어야 한다: %v", err)
+	}
+}
+
+// 아래 두 본문은 herdr 0.9.0 의 표준 오류에서 받은 것이다.
+func TestResponseError(t *testing.T) {
+	cases := []struct {
+		name string
+		out  string
+		want string
+	}{
+		{"저장소가 아닌 자리", `{"error":{"code":"not_git_worktree","message":"Herdr worktree actions require a path inside a Git work tree"},"id":"cli:worktree:list"}`, "not_git_worktree: Herdr worktree actions require a path inside a Git work tree"},
+		{"없는 워크스페이스", `{"error":{"code":"workspace_not_found","message":"workspace no-such-id not found"},"id":"cli:worktree:list"}`, "workspace_not_found: workspace no-such-id not found"},
+		{"문구 없는 오류", `{"error":{"code":"denied"}}`, "denied"},
+		{"성공 응답", `{"id":"cli:worktree:list","result":{"worktrees":[]}}`, ""},
+		{"error 가 null", `{"error":null,"result":{}}`, ""},
+		{"빈 error 객체는 오류가 아님", `{"error":{}}`, ""},
+		{"JSON 이 아님", "ok", ""},
+		{"빈 출력", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := responseError([]byte(tc.out))
+			got := ""
+			if err != nil {
+				got = err.Error()
+			}
+			if got != tc.want {
+				t.Fatalf("%q, 기대값 %q", got, tc.want)
+			}
+			if tc.want != "" {
+				var typed *ResponseError
+				if !errors.As(err, &typed) || typed.Code == "" {
+					t.Fatalf("오류 이름을 꺼낼 수 있어야 한다: %v", err)
+				}
+			}
+		})
 	}
 }
 

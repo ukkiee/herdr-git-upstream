@@ -26,13 +26,18 @@ import (
 	"herdr-git-upstream/internal/daemon"
 	"herdr-git-upstream/internal/freshen"
 	"herdr-git-upstream/internal/gitrepo"
+	"herdr-git-upstream/internal/herdrcli"
 	"herdr-git-upstream/internal/herdrconfig"
 	"herdr-git-upstream/internal/herdrpaths"
 	"herdr-git-upstream/internal/setup"
 	"herdr-git-upstream/internal/state"
+	"herdr-git-upstream/internal/worktreeui"
 )
 
 const version = "0.1.0"
+
+// pluginID는 매니페스트(herdr-plugin.toml)의 id 다. 자기 pane 을 열 때 herdr 에게 이 이름으로 말한다.
+const pluginID = "git-upstream"
 
 const usage = `herdr-git-upstream ` + version + `
 
@@ -44,6 +49,8 @@ const usage = `herdr-git-upstream ` + version + `
   herdr-git-upstream stop                             데몬을 멈춘다
   herdr-git-upstream status                           데몬과 설정 상태를 출력한다
   herdr-git-upstream setup                            붙여 넣을 herdr 설정을 출력한다
+  herdr-git-upstream worktrees [--cwd <path>]         worktree 화면을 지금 페인에 그린다
+  herdr-git-upstream open-worktrees                   worktree 화면을 herdr 팝업 pane 으로 연다
   herdr-git-upstream version                          판 번호를 출력한다
 `
 
@@ -72,6 +79,10 @@ func run(args []string) int {
 		return runStatus()
 	case "setup":
 		return runSetup()
+	case "worktrees":
+		return runWorktrees(args[1:])
+	case "open-worktrees":
+		return runOpenWorktrees()
 	case "version", "--version", "-v":
 		fmt.Println(version)
 		return 0
@@ -229,6 +240,86 @@ func abbreviateHome(path string) string {
 		return "~" + string(filepath.Separator) + rest
 	}
 	return path
+}
+
+// runWorktrees는 worktree 화면을 지금 있는 페인(터미널)에 그린다.
+//
+// 어느 저장소인지는 두 길로 정한다. 액션이나 herdr 셸에서 부르면 HERDR_WORKSPACE_ID 가 있어 그 워크스페이스의
+// 저장소이고, 없으면 현재 디렉터리다. --cwd 를 주면 그것이 우선한다. 사람이 자리를 명시했는데 환경변수가 이기면
+// 다른 저장소를 보고 있는 줄도 모르게 된다.
+//
+// 종료 코드를 가른다. 터미널이 아니면 2(사용법 오류와 같은 급이다. 파이프 뒤에서 화면을 그릴 수는 없다),
+// 저장소가 아니거나 그 밖의 실패는 1 이다.
+func runWorktrees(args []string) int {
+	cwd := ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--cwd":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "worktrees: --cwd 뒤에 경로가 있어야 한다")
+				return 2
+			}
+			cwd = args[i+1]
+			i++
+		default:
+			fmt.Fprintf(os.Stderr, "worktrees: 알 수 없는 옵션: %s\n", args[i])
+			return 2
+		}
+	}
+	workspaceID := os.Getenv("HERDR_WORKSPACE_ID")
+	if cwd != "" {
+		workspaceID = ""
+	} else {
+		dir, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "worktrees: 현재 디렉터리를 알 수 없다: %v\n", err)
+			return 1
+		}
+		cwd = dir
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "설정을 읽지 못해 기본값으로 진행한다: %v\n", err)
+	}
+	// 신호는 화면(internal/tui)이 받아 터미널을 되돌린 뒤 다시 던진다. 여기서 ctx 로 받으면 되돌린 뒤의 신호가
+	// "취소됨" 오류로 바뀌어 셸에 찍힌다. 프로세스가 신호로 끝나는 것이 그 뜻에 맞다.
+	err = worktreeui.Run(context.Background(), worktreeui.Options{
+		CWD:         cwd,
+		WorkspaceID: workspaceID,
+		Git:         gitrepo.Runner{Timeout: cfg.FetchTimeout},
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "worktrees: %v\n", err)
+		if errors.Is(err, worktreeui.ErrNoTerminal) {
+			return 2
+		}
+		return 1
+	}
+	return 0
+}
+
+// runOpenWorktrees는 worktree 화면을 herdr 의 pane 으로 연다. 키 설정과 `plugin action invoke` 가 오는 길이다.
+//
+// placement 는 비워서 부른다. 매니페스트의 popup 을 따르게 하려는 것인데 CLI 의 --placement 목록에는 popup 이
+// 없기 때문이다. 비운 것을 herdr 가 받아 주지 않으면(오류 문구에 placement 가 들어 있으면) overlay 로 한 번 더
+// 부른다. 실측 뒤 매니페스트의 popup 을 따르지 않는 것으로 확인되면 그때 기본을 overlay 로 바꾼다.
+func runOpenWorktrees() int {
+	client := herdrcli.New()
+	ctx := context.Background()
+	err := client.PluginPaneOpen(ctx, pluginID, "worktrees", "")
+	if err == nil {
+		return 0
+	}
+	fmt.Fprintf(os.Stderr, "worktree 화면을 열지 못했다: %v\n", err)
+	if !strings.Contains(err.Error(), "placement") {
+		return 1
+	}
+	fmt.Fprintln(os.Stderr, "placement 를 overlay 로 다시 시도한다")
+	if err := client.PluginPaneOpen(ctx, pluginID, "worktrees", "overlay"); err != nil {
+		fmt.Fprintf(os.Stderr, "worktree 화면을 열지 못했다: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func runStatus() int {

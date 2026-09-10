@@ -233,6 +233,19 @@ type CatchupRecord struct {
 	CheckedUnix int64 `json:"checked_unix,omitempty"`
 }
 
+// CatchupKey는 따라잡기 기록의 열쇠다. fetch 기록의 열쇠(추적 참조 단위)에 브랜치를 더한다.
+//
+// 같은 추적 참조를 따라가는 브랜치가 둘 이상인 일은 흔하다. herdr 가 `git worktree add -b <새> <경로>
+// origin/<브랜치>` 로 만든 worktree 들은 모두 그 통합 브랜치를 upstream 으로 갖는다. 추적 참조 단위로 두면
+// 그 worktree 들이 회차마다 서로의 캐시를 지워 merge-tree 가 매번 다시 돈다.
+//
+// 기록과 같은 자리에 두는 이유가 있다. 데몬과 worktree 화면이 같은 캐시를 나눠 쓰는데, 열쇠 공식이 두 곳에
+// 따로 적혀 있으면 한쪽만 고쳐져 서로 다른 파일을 보게 되고 그 어긋남은 시험이 아니라 느려진 화면이 먼저 알린다.
+// fetchKey 는 gitrepo.Upstream.FetchKey 가 만든 값이다.
+func CatchupKey(fetchKey, branch string) string {
+	return Key(fetchKey + "\x00" + branch)
+}
+
 func (s Store) catchupRecordPath(key string) string {
 	return filepath.Join(s.sharedRoot(), "catchup", key+".json")
 }

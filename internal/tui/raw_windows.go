@@ -45,39 +45,37 @@ func setConsoleMode(handle syscall.Handle, mode uint32) error {
 	return nil
 }
 
-// enterRaw는 콘솔의 입력과 출력 모드를 바꾸고 되돌리는 함수를 돌려준다.
+// enterRaw는 콘솔의 입력과 출력 모드를 바꾸고 각각 되돌리는 함수를 돌려준다.
 //
 // 입력에서는 줄 단위 입력, 되울림, 그리고 Ctrl-C 를 신호로 바꾸는 처리(PROCESSED_INPUT)를 끄고, 화살표를
 // ESC 시퀀스로 주는 가상 터미널 입력을 켠다. 그래야 유닉스와 같은 바이트가 와서 ParseKeys 하나로 읽는다.
 // 출력에서는 ESC 시퀀스를 해석하는 가상 터미널 처리를 켠다. 이것이 없으면 커서 이동 코드가 글자로 찍힌다.
 // 표준 입력이 콘솔이 아니면 GetConsoleMode 가 실패하고, 그것이 곧 "터미널이 아니다"는 답이다.
-func enterRaw(in, out *os.File) (restore func() error, err error) {
+// 출력 복원은 입력과 따로 돌려주어 Terminal.Close 가 화면 종료 시퀀스를 쓸 때까지 VT 처리를 유지하게 한다.
+func enterRaw(in, out *os.File) (restore, restoreOutput func() error, err error) {
 	inHandle := syscall.Handle(in.Fd())
 	outHandle := syscall.Handle(out.Fd())
 	inMode, err := getConsoleMode(inHandle)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	outMode, err := getConsoleMode(outHandle)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	rawIn := (inMode &^ (enableEchoInput | enableLineInput | enableProcessedInput)) | enableVirtualTerminalInput
 	if err := setConsoleMode(inHandle, rawIn); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := setConsoleMode(outHandle, outMode|enableProcessedOutput|enableVirtualTerminalProcessing); err != nil {
 		_ = setConsoleMode(inHandle, inMode)
-		return nil, err
+		return nil, nil, err
 	}
 	return func() error {
-		outErr := setConsoleMode(outHandle, outMode)
-		inErr := setConsoleMode(inHandle, inMode)
-		if inErr != nil {
-			return inErr
-		}
-		return outErr
-	}, nil
+			return setConsoleMode(inHandle, inMode)
+		}, func() error {
+			return setConsoleMode(outHandle, outMode)
+		}, nil
 }
 
 // isTerminal은 f 가 콘솔인지 답한다. enterRaw 가 "터미널이 아니다" 를 판단하는 바로 그 호출(GetConsoleMode)을

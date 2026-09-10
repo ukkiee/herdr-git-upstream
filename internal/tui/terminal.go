@@ -14,8 +14,10 @@ import (
 type Terminal struct {
 	in  *os.File
 	out *os.File
-	// restore는 raw 모드로 바꾸기 전의 설정으로 되돌린다. 플랫폼 코드가 만든다.
+	// restore는 입력 설정을 raw 모드로 바꾸기 전으로 되돌린다. 출력 전에 불러 SIGPIPE 에도 입력은 복원한다.
 	restore func() error
+	// restoreOutput은 화면 종료 시퀀스 뒤에 출력 모드를 되돌린다. 출력 모드를 바꾸지 않는 유닉스에서는 nil 이다.
+	restoreOutput func() error
 
 	closeOnce sync.Once
 	closeErr  error
@@ -46,13 +48,17 @@ func Open() (*Terminal, error) {
 	if !isTerminal(t.out) {
 		return nil, errors.New("표준 출력이 터미널이 아니다")
 	}
-	restore, err := enterRaw(t.in, t.out)
+	restore, restoreOutput, err := enterRaw(t.in, t.out)
 	if err != nil {
 		return nil, fmt.Errorf("터미널을 raw 모드로 바꾸지 못했다: %w", err)
 	}
 	t.restore = restore
+	t.restoreOutput = restoreOutput
 	if _, err := t.out.WriteString("\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H"); err != nil {
 		_ = restore()
+		if restoreOutput != nil {
+			_ = restoreOutput()
+		}
 		return nil, fmt.Errorf("대체 화면을 켜지 못했다: %w", err)
 	}
 	t.watchSignals()
@@ -61,10 +67,11 @@ func Open() (*Terminal, error) {
 
 // Close는 raw 모드를 되돌리고 커서를 보이고 대체 화면을 끈다. 여러 번 불러도 한 번만 되돌린다.
 //
-// 되돌리기가 쓰기보다 먼저다. 표준 출력이 끊긴 파이프면 쓰는 순간 SIGPIPE 로 프로세스가 끝나는데(os/signal
+// 입력 되돌리기가 쓰기보다 먼저다. 표준 출력이 끊긴 파이프면 쓰는 순간 SIGPIPE 로 프로세스가 끝나는데(os/signal
 // 문서의 SIGPIPE 절. 이 패키지는 SIGPIPE 를 받지 않으므로 그 규칙 그대로다), 그때 되돌리기가 뒤에 있으면
-// 표준 입력의 termios 가 raw 모드로 남는다. 순서를 바꿔도 시퀀스 출력에는 영향이 없다. termios 는 입력
-// 처리만 바꾸고 출력 후처리(OPOST)는 처음부터 건드리지 않았기 때문이다.
+// 표준 입력의 termios 가 raw 모드로 남는다. 유닉스의 출력 후처리(OPOST)는 처음부터 건드리지 않는다.
+// 윈도우의 출력 모드는 시퀀스를 쓴 뒤에 되돌린다. 그 전에 VT 처리를 끄면 커서 표시와 대체 화면 해제 시퀀스가
+// 글자로 찍히고 화면이 남는다. 쓰기나 입력 복원이 실패해도 출력 모드는 복원한다.
 func (t *Terminal) Close() error {
 	t.closeOnce.Do(func() {
 		signal.Stop(t.signals)
@@ -72,8 +79,12 @@ func (t *Terminal) Close() error {
 		restoreErr := t.restore()
 		// 꾸밈을 전부 끄고 나간다. 반전이나 색이 켜진 채 대체 화면을 끄면 셸 프롬프트가 그 꾸밈을 이어받는다.
 		_, writeErr := t.out.WriteString("\x1b[0m\x1b[?25h\x1b[?1049l")
+		var outputErr error
+		if t.restoreOutput != nil {
+			outputErr = t.restoreOutput()
+		}
 		// 되돌리기 실패가 더 중요한 오류다. 쓰기 실패는 화면이 조금 지저분해질 뿐이다.
-		t.closeErr = errors.Join(restoreErr, writeErr)
+		t.closeErr = errors.Join(restoreErr, outputErr, writeErr)
 	})
 	return t.closeErr
 }

@@ -27,6 +27,7 @@ herdr는 사이드바에 앞뒤 커밋 수를 그린다. 그런데 그 숫자는
 2. 워크스페이스마다 `$behind`와 `$ahead` 토큰을 보고하고, 그 브랜치가 원격에서 끝난 작업인지
    (`$gone`, `$merged`)와 따라잡을 때 충돌하는지(`$catchup`)를 함께 보고한다.
 3. 새로 만든 worktree를 원격의 최신 상태로 맞춘다.
+4. 한 저장소의 worktree 전부를 판정과 함께 표로 보이고, 끝난 것을 지우는 [worktree 화면](#worktree-화면)을 연다.
 
 두 번째가 필요한 이유가 있다. herdr는 같은 저장소를 공유하는 워크스페이스들을 묶어서 들여쓰는데,
 **들여쓴 행에서는 내장 `branch`와 `git_status` 토큰을 지운다.** worktree를 여러 개 열어 두고 쓰는
@@ -168,6 +169,83 @@ rows = [
 토큰 이름을 빈 문자열로 두면 그 토큰은 보고하지 않는다. 설정은 매 회차마다 다시 읽으므로
 herdr를 재시작하지 않아도 주기를 바꿀 수 있다.
 
+## worktree 화면
+
+worktree를 열 개 넘게 열어 두면 어느 것이 끝난 작업인지 사람이 기억하지 못한다. 사이드바 토큰은 한 줄에
+조금씩만 보여 줄 수 있어서, 한눈에 견주려면 화면이 필요하다. 한 저장소의 worktree 전부를 판정과 함께
+표로 보이고, `safe`인 것만 지운다.
+
+```
+ mfe · 27 worktrees                     fetched 3s ago    ↑↓ move  ⏎ open  r refresh
+
+ safe    add-shopping-widget-api   gone, merged
+ safe    fix-design-detail         merged
+ review  design-qa-3               ↓12, conflicts
+ review  packages                  dirty
+ review  DEMO-1570                 gone, unpushed?
+ keep    agent-admin               up to date
+ keep    fix-modal                 ↓3, clean catch-up
+ blocked widget-studio/dev         main checkout
+ blocked fix-agent                 agent working
+
+ 2 safe · d remove selected · D remove all safe · q close
+```
+
+**여는 길은 셋이다.**
+
+| 통로 | 쓰임새 |
+| --- | --- |
+| 키 설정 (`type = "plugin_action"`, `git-upstream.worktrees`) | 평소 사용. `setup`이 이 설정을 내놓는다 |
+| `herdr plugin action invoke worktrees --plugin git-upstream` | 스크립트나 시험 |
+| `herdr-git-upstream worktrees [--cwd <path>]` | 터미널에서 직접. 데몬 없이도, herdr 없이도 돈다 |
+
+앞의 둘은 herdr 팝업 pane으로 열리고, 마지막은 지금 있는 페인에 그대로 그린다. herdr에는 액션을 골라
+실행하는 화면이 없으므로 **키에 묶기 전에는 없는 것과 같다.** 어느 저장소인지는 액션으로 열면
+`HERDR_WORKSPACE_ID`가 속한 저장소, 터미널에서 부르면 현재 디렉터리(`--cwd`를 주면 그것)다. 그 자리가 git
+저장소가 아니면 `not a git repository: <경로>`를 적고 종료 코드 1로 끝난다. herdr에 닿지 않으면
+`git worktree list`로 대신하되 제목 줄에 `herdr unavailable`이 보이고, 그때는 "herdr에 열려 있음" 정보가
+없어 Enter로 옮겨 갈 수 없다.
+
+**열릴 때 스스로 원격을 본다.** 데몬은 herdr에 열린 워크스페이스만 돌기 때문에 나머지 worktree의 상태를
+모른다. 열자마자 로컬 참조로 표를 먼저 그리고, 배경에서 `git fetch`(전체 브랜치, 왕복 한 번)와
+`git ls-remote --heads`(사라진 브랜치 판정, 왕복 한 번)를 나란히 돌린 뒤 다시 그린다. **prune은 하지
+않는다.** 사용자의 참조를 건드리지 않는다는 약속은 여기서도 같다. 화면의 `gone`은 `ls-remote` 결과에
+그 브랜치가 없는 것이고, 그 결과가 없을 때만 데몬의 fetch 기록으로 판정한다. fetch가 실패하면 제목 줄에
+`fetch failed`로만 보이고 표는 로컬 자료로 남는다. `r`로 다시 돌린다.
+
+**판정.**
+
+| 판정 | 조건 |
+| --- | --- |
+| `blocked` | 본 체크아웃이거나, `git worktree lock`으로 잠겼거나, 디렉터리가 사라졌거나, herdr에서 에이전트가 일하는 중. 지울 수 없다 |
+| `safe` | 손대지 않았고(추적되지 않은 파일까지 없음), `merged`이거나 (`gone`이면서 앞선 커밋이 0임을 확인할 수 있음). 끝난 일이다 |
+| `review` | 손댄 것이 있거나, 따라잡을 때 충돌하거나, `gone`인데 앞선 커밋이 있거나 확인할 수 없음(추적 참조가 이미 지워짐) |
+| `keep` | 그 밖의 전부. 최신이거나 깨끗하게 따라잡을 수 있는 진행 중인 작업 |
+
+정렬은 판정 순서(safe, review, keep, blocked) 다음 브랜치 이름이다. 설명 열은 사이드바 토큰과 같은
+판정 함수가 낸 조각들이라 두 자리가 다른 답을 내지 않는다.
+
+**키.**
+
+| 키 | 동작 |
+| --- | --- |
+| `↑` `↓` `j` `k` | 이동 |
+| `Enter` | herdr에 열려 있으면 그 워크스페이스로, 아니면 `herdr worktree open --path <경로> --focus`. 그리고 화면을 닫는다 |
+| `d` | 선택한 것이 `safe`면 확인 없이 지운다. 아니면 이유를 아래 줄에 보여 준다 |
+| `D` | `safe` 전부를 "Remove N worktrees? y/N" 한 번 묻고 지운다 |
+| `r` | 다시 fetch |
+| `q` `Esc` `Ctrl-C` | 닫기 |
+
+**삭제 규칙.** `safe`인 것만 지운다. herdr에 열려 있으면 `herdr worktree remove --workspace <id>`,
+디스크에만 있으면 `git worktree remove <경로>`다. **강제 삭제는 없다.** 삭제 직전에 대상과 HEAD,
+안전 판정을 다시 확인하고, 바뀌었으면 거절한다. 파일 변경은 herdr와 git도 마지막 문턱에서 확인한다.
+`D`는 확인창을 열 때의 대상만 지우며, 배경 갱신이 대상을 늘리지 않는다. 삭제 도중 닫기를 요청하면
+진행 중인 삭제가 끝난 뒤 닫는다. 에이전트 상태를 조회하지 못한 열린 worktree도 삭제하지 않는다.
+브랜치는 남긴다. 확인 물음은 `D`에만 둔다. 근거는
+[ADR 0002](docs/adr/0002-removal-boundary.md)에 있다.
+
+윈도우에서는 교차 컴파일까지만 확인했다. 콘솔 raw 모드와 팝업 pane 의 상대 경로 명령은 실측하지 못했다.
+
 ## 동작 방식
 
 ```
@@ -281,18 +359,23 @@ HEAD`의 종료 코드로 충돌 여부를 안다. 뒤처짐이 0보다 클 때�
 ## 명령
 
 ```sh
-herdr plugin action invoke refresh --plugin git-upstream   # 스로틀을 무시하고 지금 갱신
-herdr plugin action invoke start   --plugin git-upstream   # 데몬 시작
-herdr plugin action invoke stop    --plugin git-upstream   # 데몬 중지
+herdr plugin action invoke worktrees --plugin git-upstream # worktree 화면을 팝업 pane 으로 연다
+herdr plugin action invoke refresh   --plugin git-upstream # 스로틀을 무시하고 지금 갱신
+herdr plugin action invoke start     --plugin git-upstream # 데몬 시작
+herdr plugin action invoke stop      --plugin git-upstream # 데몬 중지
 ```
 
 실행 파일을 직접 부를 수도 있다.
 
 ```sh
-./bin/herdr-git-upstream setup     # config.toml 에 붙여 넣을 설정을 출력 (파일은 고치지 않는다)
-./bin/herdr-git-upstream status    # 데몬과 설정 상태를 JSON 으로 출력
+./bin/herdr-git-upstream setup                 # config.toml 에 붙여 넣을 설정을 출력 (파일은 고치지 않는다)
+./bin/herdr-git-upstream status                # 데몬과 설정 상태를 JSON 으로 출력
 ./bin/herdr-git-upstream refresh
+./bin/herdr-git-upstream worktrees             # worktree 화면을 지금 페인에 그린다 (--cwd <path> 로 저장소를 고른다)
+./bin/herdr-git-upstream open-worktrees        # worktree 화면을 herdr 팝업 pane 으로 연다 (액션이 부르는 명령)
 ```
+
+`worktrees`는 표준 입출력이 터미널이어야 한다. 파이프 뒤에서는 종료 코드 2로 끝난다.
 
 ## 문제를 살펴볼 때
 

@@ -23,11 +23,11 @@ import (
 // cfmakeraw 와 같은 것을 끄되 출력 쪽(OPOST)은 그대로 둔다. Frame 은 줄마다 커서를 직접 옮기므로 출력
 // 후처리가 있어도 상관없고, 켜 두면 오류 문구처럼 화면 밖에서 새어 나온 출력의 줄 바꿈이 망가지지 않는다.
 // ISIG 를 끄므로 Ctrl-C 는 신호가 아니라 바이트로 온다. 화면이 그것을 KeyCtrlC 로 받아 닫는다.
-func enterRaw(in, _ *os.File) (restore func() error, err error) {
+func enterRaw(in, _ *os.File) (restore, restoreOutput func() error, err error) {
 	fd := in.Fd()
 	var saved syscall.Termios
 	if err := ioctl(fd, ioctlReadTermios, unsafe.Pointer(&saved)); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	raw := saved
 	raw.Iflag &^= syscall.IGNBRK | syscall.BRKINT | syscall.PARMRK | syscall.ISTRIP |
@@ -39,11 +39,11 @@ func enterRaw(in, _ *os.File) (restore func() error, err error) {
 	raw.Cc[syscall.VMIN] = 1
 	raw.Cc[syscall.VTIME] = 0
 	if err := ioctl(fd, ioctlWriteTermios, unsafe.Pointer(&raw)); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	return func() error {
 		return ioctl(fd, ioctlWriteTermios, unsafe.Pointer(&saved))
-	}, nil
+	}, nil, nil
 }
 
 // ioctl은 포인터 인자를 받는 ioctl 하나를 부른다.

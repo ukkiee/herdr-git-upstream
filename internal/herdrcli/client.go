@@ -319,6 +319,9 @@ func (c *Client) runWithTimeout(ctx context.Context, timeout time.Duration, args
 	cmd.Stdin = nil
 
 	if err := cmd.Run(); err != nil {
+		if rejected := responseError(stderr.Bytes()); rejected != nil {
+			return nil, fmt.Errorf("herdr %s 실패: %w", strings.Join(args, " "), rejected)
+		}
 		detail := strings.TrimSpace(stderr.String())
 		if detail == "" {
 			detail = strings.TrimSpace(stdout.String())
@@ -329,6 +332,38 @@ func (c *Client) runWithTimeout(ctx context.Context, timeout time.Duration, args
 		return nil, fmt.Errorf("herdr %s 실패: %w", strings.Join(args, " "), err)
 	}
 	return stdout.Bytes(), nil
+}
+
+// ResponseError는 herdr 가 표준 오류의 JSON 봉투에 실어 보낸 거절이다.
+// Code 는 `workspace_not_found` 같은 herdr 의 오류 이름이다.
+type ResponseError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func (e *ResponseError) Error() string {
+	if e.Message == "" {
+		return e.Code
+	}
+	return e.Code + ": " + e.Message
+}
+
+// responseError는 표준 오류의 오류 봉투를 읽는다. 봉투가 아니면 nil 이다.
+//
+// herdr 0.9.0 은 서버의 거절을 종료 코드 1, 표준 오류의 JSON 으로 알린다(2026-09-10 실측).
+// 오류 이름을 보존해야 호출자가 서버의 거절과 서버에 닿지 못한 경우를 구분할 수 있다.
+// 봉투가 아니면 runWithTimeout 이 원래 실행 오류와 표준 오류 문구를 사용한다.
+func responseError(out []byte) error {
+	var envelope struct {
+		Error *ResponseError `json:"error"`
+	}
+	if err := json.Unmarshal(out, &envelope); err != nil || envelope.Error == nil {
+		return nil
+	}
+	if envelope.Error.Code == "" && envelope.Error.Message == "" {
+		return nil
+	}
+	return envelope.Error
 }
 
 func truncate(s string, limit int) string {
