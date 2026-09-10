@@ -254,10 +254,14 @@ herdr 에는 액션을 골라 실행하는 화면이 없고, 액션의 `contexts
  2 safe · d remove selected · D remove all safe · q close
 ```
 
-**저장소는 하나다.** 두 화면의 선택 순서는 명시한 `--cwd`, `HERDR_WORKSPACE_ID`, 현재 디렉터리다.
+**저장소는 하나다.** 두 화면의 선택 순서는 명시한 `--cwd`, 플러그인 호출 문맥
+(`HERDR_PLUGIN_CONTEXT_JSON.workspace_id`), `HERDR_WORKSPACE_ID`, 현재 디렉터리다.
+팝업의 현재 디렉터리는 플러그인 뿌리이므로 호출 문맥을 먼저 읽는다. 주어진 문맥이 잘못되었거나
+워크스페이스가 없으면 다른 저장소로 넘어가지 않고 오류로 종료한다.
 herdr 안의 일반 셸에도 워크스페이스 ID가 있으므로 `cd` 뒤 다른 저장소를 보려면 `--cwd`로 지정한다.
 선택한 저장소를 `herdr worktree list` 로 나열한다. 그 자리가 git 저장소가 아니면 그렇게 알리고 닫는다.
-herdr 에 닿지 않으면(데몬 없이 터미널에서 부른 경우 등) `git worktree list --porcelain` 으로 대신하되,
+팝업 호출 문맥만 있을 때 herdr에 닿지 않으면 원래 연결 오류로 종료한다. 저장소 디렉터리를 아는
+직접 실행에서 herdr에 닿지 않으면 `git worktree list --porcelain` 으로 대신하되,
 그때는 "herdr 에 열려 있음" 정보가 없다.
 
 **열릴 때 스스로 원격을 본다.** 데몬은 herdr 에 열린 워크스페이스만 돌기 때문에(mfe 는 27개 중 2개)

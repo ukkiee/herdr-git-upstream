@@ -197,6 +197,19 @@ ID를 돌려주는 `--placement tab`을 사용했다.
 고정 크기는 `width = 64`, `height = 18`처럼 정수 셀 수로 쓴다. 문자열은 `"90%"`처럼
 백분율만 허용하며 `"64"`는 manifest 읽기 단계에서 거절된다(`src/popup_size.rs:36-40,118-140`).
 
+### popup의 저장소 문맥은 JSON으로 전달된다
+
+일반 tab/split과 달리 popup은 새 일반 페인의 workspace ID를 지정하지 않는다.
+`src/app/popup.rs:139`의 `without_pane_identity`는 기존 pane ID만 제거하며
+(`src/pane.rs:132-165`), workspace ID는 없거나 서버에서 물려받은 값일 수 있다.
+플러그인 pane의 기본 cwd도 호출한 저장소가 아니라 플러그인 뿌리다
+(`src/app/api/plugins/panes.rs:329-337`).
+
+호출한 워크스페이스는 `HERDR_PLUGIN_CONTEXT_JSON.workspace_id`로 전달된다
+(`src/app/api/plugins/panes.rs:18-21,240-267`). 두 화면은 명시한 `--cwd` 다음으로
+이 문맥을 우선한다. 2026-09-10 사용자 보고로 JSON을 읽지 않던 오류를 발견했다.
+일반 tab으로만 시험하면 올바른 workspace ID가 별도로 주입되어 이 오류가 드러나지 않는다.
+
 ### 매니페스트가 지원하는 것
 
 `build`, `startup`, `actions`, `events`, `panes`, `link_handlers` 여섯 가지뿐이다

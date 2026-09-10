@@ -260,6 +260,10 @@ func TestResolveFallsBackToGit(t *testing.T) {
 	f.addWorktree(t, "a")
 	herdr := newFakeHerdr(f)
 	herdr.listErr = errors.New("herdr: connection refused")
+	// A popup only knows its invoking workspace, not a verified repository directory.
+	if _, err := resolve(ctx, herdr, f.git, "w1", ""); !errors.Is(err, herdr.listErr) {
+		t.Fatalf("popup without a fallback path must retain the herdr error: %v", err)
+	}
 
 	// 연결된 worktree 에서 시작해도 본 체크아웃을 찾는다.
 	inv, err := resolve(ctx, herdr, f.git, "w1", filepath.Join(f.base, "wt", "a"))

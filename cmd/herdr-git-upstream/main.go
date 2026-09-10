@@ -250,9 +250,8 @@ func abbreviateHome(path string) string {
 
 // runWorktrees는 worktree 화면을 지금 있는 페인(터미널)에 그린다.
 //
-// 어느 저장소인지는 두 길로 정한다. 액션이나 herdr 셸에서 부르면 HERDR_WORKSPACE_ID 가 있어 그 워크스페이스의
-// 저장소이고, 없으면 현재 디렉터리다. --cwd 를 주면 그것이 우선한다. 사람이 자리를 명시했는데 환경변수가 이기면
-// 다른 저장소를 보고 있는 줄도 모르게 된다.
+// --cwd, 플러그인 호출 문맥, 일반 페인의 HERDR_WORKSPACE_ID, 현재 디렉터리 순으로 저장소를 정한다.
+// 팝업의 작업 디렉터리는 플러그인 뿌리이며 일반 페인의 ID가 보장되지 않으므로 호출 문맥을 읽어야 한다.
 //
 // 종료 코드를 가른다. 터미널이 아니면 2(사용법 오류와 같은 급이다. 파이프 뒤에서 화면을 그릴 수는 없다),
 // 저장소가 아니거나 그 밖의 실패는 1 이다.
@@ -281,12 +280,28 @@ func runScreen(args []string, command string, screen func(context.Context, workt
 	if cwd != "" {
 		workspaceID = ""
 	} else {
-		dir, err := os.Getwd()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s: 현재 디렉터리를 알 수 없다: %v\n", command, err)
-			return 1
+		if raw := os.Getenv("HERDR_PLUGIN_CONTEXT_JSON"); raw != "" {
+			var invocation struct {
+				WorkspaceID string `json:"workspace_id"`
+			}
+			if err := json.Unmarshal([]byte(raw), &invocation); err != nil {
+				fmt.Fprintf(os.Stderr, "%s: 플러그인 호출 문맥을 읽지 못했다: %v\n", command, err)
+				return 1
+			}
+			if invocation.WorkspaceID == "" {
+				fmt.Fprintf(os.Stderr, "%s: 플러그인 호출 문맥에 워크스페이스가 없다\n", command)
+				return 1
+			}
+			workspaceID = invocation.WorkspaceID
+			// The popup cwd is the plugin checkout, not a safe fallback repository.
+		} else {
+			dir, err := os.Getwd()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%s: 현재 디렉터리를 알 수 없다: %v\n", command, err)
+				return 1
+			}
+			cwd = dir
 		}
-		cwd = dir
 	}
 	cfg, err := config.Load()
 	if err != nil {

@@ -214,9 +214,14 @@ and removes only those marked `safe`.
 
 The first two open a herdr popup pane. The last draws in the current pane. herdr has no action picker,
 so **bind the action to a key to make it readily accessible**. Both screens select the repository in
-this order: explicit `--cwd`, then `HERDR_WORKSPACE_ID`, then the process working directory. A shell
-inside herdr also inherits the workspace ID; use `--cwd <path>` to select another repository after `cd`.
-If that location is not a Git repository, the command reports the error and exits with code 1. If herdr is unavailable, the screen falls back to `git worktree list`, shows
+this order: explicit `--cwd`, then the workspace in `HERDR_PLUGIN_CONTEXT_JSON`, then
+`HERDR_WORKSPACE_ID`, then the process working directory. Popups use their invocation context because
+their working directory is the plugin checkout. An invalid or missing workspace in a supplied context
+is an error. A shell inside herdr also inherits the workspace ID; use `--cwd <path>` to select another
+repository after `cd`.
+If that location is not a Git repository, the command reports the error and exits with code 1. A popup
+requires herdr to resolve its workspace and reports connection failures. When a direct invocation has
+a repository working directory and herdr is unavailable, the screen falls back to `git worktree list`, shows
 `herdr unavailable` in the header, and lacks information about open herdr workspaces. Enter cannot
 switch workspaces in that mode.
 

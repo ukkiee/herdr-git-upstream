@@ -66,7 +66,7 @@ func resolve(ctx context.Context, herdr Herdr, git gitrepo.Runner, workspaceID, 
 			return fromHerdr(ctx, git, res, cwd)
 		}
 		var rejected *herdrcli.ResponseError
-		if errors.As(err, &rejected) {
+		if errors.As(err, &rejected) || cwd == "" {
 			return inventory{}, err
 		}
 	}
