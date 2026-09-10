@@ -296,3 +296,32 @@ func sameDir(a, b string) bool {
 	}
 	return ra == rb
 }
+
+// 좁은 fetch 와 전체 fetch 는 같은 옵션(prune 없음, FETCH_HEAD 없음, gc 없음)을 한 목록에서 얻어야 한다.
+// 참조 사양이 있으면 원격 뒤에 붙고, 없으면 원격에서 끝나 기본 참조 사양을 따른다.
+func TestFetchArgsSharesOptionsBetweenNarrowAndFullFetch(t *testing.T) {
+	options := []string{
+		"-c", "gc.auto=0",
+		"fetch", "--quiet", "--no-tags", "--no-prune", "--no-prune-tags",
+		"--no-recurse-submodules", "--no-write-fetch-head",
+		"--",
+	}
+	cases := []struct {
+		name     string
+		remote   string
+		refspecs []string
+		want     []string
+	}{
+		{"좁은 fetch 는 참조 사양이 원격 뒤에 옴", "origin", []string{"+refs/heads/main:refs/remotes/origin/main"}, append(append([]string{}, options...), "origin", "+refs/heads/main:refs/remotes/origin/main")},
+		{"전체 fetch 는 원격에서 끝남", "origin", nil, append(append([]string{}, options...), "origin")},
+		{"원격 이름에 / 가 있어도 그대로", "team/upstream", nil, append(append([]string{}, options...), "team/upstream")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := fetchArgs(tc.remote, tc.refspecs...)
+			if strings.Join(got, "\x00") != strings.Join(tc.want, "\x00") {
+				t.Fatalf("%q, 기대값 %q", got, tc.want)
+			}
+		})
+	}
+}

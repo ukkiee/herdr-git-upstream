@@ -419,25 +419,59 @@ func (r Runner) FastForward(ctx context.Context, repo Repo, trackingRef string) 
 
 // Fetch는 현재 브랜치의 원격 추적 참조 하나만 갱신한다.
 //
-// 좁게 가져오는 것이 핵심이다. 태그와 다른 브랜치까지 끌어오면 이 주기로 반복하기에는 비용이 크고,
-// prune은 남의 작업 중인 참조를 지울 수 있다. 자동 정리(gc)도 꺼 둔다. 주기적으로 도는 작업이
-// 사용자가 모르는 사이에 무거운 정리 작업을 반복해서 깨우면 곤란하기 때문이다.
-//
-// --no-write-fetch-head는 사용자의 작업을 건드리지 않기 위한 것이다. 이것이 없으면 배경에서 도는
-// 이 fetch가 FETCH_HEAD를 다시 쓰는데, 사용자가 방금 손으로 fetch한 뒤 `git merge FETCH_HEAD`를
-// 하려던 참이었다면 엉뚱한 커밋을 병합하게 된다.
+// 좁게 가져오는 것이 핵심이다. 태그와 다른 브랜치까지 끌어오면 이 주기로 반복하기에는 비용이 크다.
+// 나머지 옵션과 그 이유는 fetchArgs 에 있다.
 //
 // 참조 사양 앞의 "+"는 강제 갱신을 뜻한다. 원격 추적 참조는 원격을 그대로 비추는 자리이고 git 자신의
 // 기본 참조 사양도 강제이므로, 되감기 push가 일어난 뒤에도 숫자가 사실과 어긋나지 않게 하려면 필요하다.
 func (r Runner) Fetch(ctx context.Context, repo Repo, up Upstream) error {
 	refspec := "+" + up.RemoteRef + ":" + up.TrackingRef
-	_, err := r.gitWithEnv(ctx, repo.Root, r.fetchTimeout(), r.fetchEnv(ctx, repo),
+	_, err := r.gitWithEnv(ctx, repo.Root, r.fetchTimeout(), r.fetchEnv(ctx, repo), fetchArgs(up.Remote, refspec)...)
+	return err
+}
+
+// FetchAll은 원격의 브랜치 전부를 기본 참조 사양으로 가져온다. worktree 화면이 열릴 때 한 번 부른다.
+//
+// Fetch 가 참조 하나씩 좁게 가져오는 것과 반대다. 데몬은 열린 워크스페이스만 돌기 때문에 나머지
+// worktree 의 추적 참조는 낡아 있는데, 화면은 그 전부를 한눈에 견주는 자리라 왕복 한 번으로 모두
+// 갱신하는 편이 참조 수십 개를 하나씩 가져오는 것보다 싸다. 옵션은 fetchArgs 가 Fetch 와 같게 만든다.
+// 특히 prune 은 하지 않는다. 사라진 브랜치의 판정은 RemoteHeads 가 맡고, 사용자의 참조는 건드리지 않는다.
+//
+// 제한 시간은 좁은 fetch 의 세 배다. 브랜치가 수백 개인 저장소에서 한 번의 fetch 가 좁은 fetch 보다
+// 오래 걸리는 것은 당연한데, 같은 제한 시간을 두면 큰 저장소에서만 화면이 늘 "fetch failed" 가 된다.
+func (r Runner) FetchAll(ctx context.Context, repo Repo, remote string) error {
+	if remote == "" {
+		return fmt.Errorf("원격 이름이 비어 있다")
+	}
+	_, err := r.gitWithEnv(ctx, repo.Root, fetchAllTimeoutFactor*r.fetchTimeout(), r.fetchEnv(ctx, repo), fetchArgs(remote)...)
+	return err
+}
+
+// fetchAllTimeoutFactor는 전체 fetch 의 제한 시간이 좁은 fetch 의 몇 배인지다.
+const fetchAllTimeoutFactor = 3
+
+// fetchArgs는 fetch 명령의 인자를 만든다. 데몬의 좁은 fetch(Fetch)와 화면의 전체 fetch(FetchAll)가 함께 쓴다.
+//
+// 한곳에 두는 이유는 두 fetch 가 같은 약속을 지켜야 하기 때문이다. 목록을 두 곳에 따로 적으면 한쪽만 고쳐져
+// 데몬과 화면이 서로 다른 약속(prune, FETCH_HEAD)을 갖게 되고, 그 차이는 시험이 아니라 사용자가 먼저 알아챈다.
+//
+// prune은 하지 않는다. 남의 작업 중인 참조를 지울 수 있다. 자동 정리(gc)도 꺼 둔다. 사용자가 모르는 사이에
+// 도는 작업이 무거운 정리 작업을 반복해서 깨우면 곤란하기 때문이다. 태그와 하위 모듈도 가져오지 않는다.
+// 이 플러그인이 견주는 것은 브랜치의 추적 참조뿐이다.
+//
+// --no-write-fetch-head는 사용자의 작업을 건드리지 않기 위한 것이다. 이것이 없으면 배경에서 도는
+// 이 fetch가 FETCH_HEAD를 다시 쓰는데, 사용자가 방금 손으로 fetch한 뒤 `git merge FETCH_HEAD`를
+// 하려던 참이었다면 엉뚱한 커밋을 병합하게 된다.
+//
+// refspecs 가 비어 있으면 원격에 설정된 기본 참조 사양(remote.<이름>.fetch)으로 가져온다.
+func fetchArgs(remote string, refspecs ...string) []string {
+	args := []string{
 		"-c", "gc.auto=0",
 		"fetch", "--quiet", "--no-tags", "--no-prune", "--no-prune-tags",
 		"--no-recurse-submodules", "--no-write-fetch-head",
-		"--", up.Remote, refspec,
-	)
-	return err
+		"--", remote,
+	}
+	return append(args, refspecs...)
 }
 
 // fetchEnv는 fetch에 쓸 환경을 만든다.

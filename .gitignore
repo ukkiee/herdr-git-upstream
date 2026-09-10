@@ -1,1 +1,4 @@
 /bin/
+# 루트에서 -o 없이 `go build ./cmd/herdr-git-upstream` 을 돌리면 여기 남는 산출물. 교차 컴파일 확인 중 생긴 것이 커밋에 섞이지 않게 한다.
+/herdr-git-upstream
+/herdr-git-upstream.exe

@@ -144,6 +144,35 @@ func (r Runner) RemoteHeadFromRemote(ctx context.Context, repo Repo, remote stri
 	return "", ErrRemoteHasNoHead
 }
 
+// RemoteHeads는 원격에 지금 있는 브랜치들의 참조 이름(refs/heads/...)을 모은다. 네트워크를 탄다.
+//
+// worktree 화면의 gone 판정에 쓴다. 데몬의 fetch 기록은 열린 워크스페이스에만 있어서 나머지 worktree 의
+// gone 을 알 수 없고, prune 은 사용자의 참조를 지우므로 하지 않는다. `git ls-remote --heads` 는 참조를
+// 건드리지 않고 왕복 한 번으로 원격의 브랜치 목록을 준다. upstream 의 원격 쪽 참조가 이 목록에 없으면
+// 그 브랜치는 원격에서 사라진 것이다.
+//
+// 한 줄은 `<해시>\t<참조 이름>` 이다. --heads 만 주었으므로 refs/heads/ 아래만 오지만, 그래도 그 앞부분을
+// 확인해 다른 것이 섞여도 목록이 오염되지 않게 한다.
+func (r Runner) RemoteHeads(ctx context.Context, repo Repo, remote string) (map[string]bool, error) {
+	if remote == "" {
+		return nil, fmt.Errorf("원격 이름이 비어 있다")
+	}
+	out, err := r.gitWithEnv(ctx, repo.Root, r.fetchTimeout(), r.fetchEnv(ctx, repo),
+		"ls-remote", "--heads", "--", remote)
+	if err != nil {
+		return nil, err
+	}
+	heads := map[string]bool{}
+	for _, line := range splitLines(out) {
+		_, ref, found := strings.Cut(line, "\t")
+		if !found || !strings.HasPrefix(ref, "refs/heads/") {
+			continue
+		}
+		heads[ref] = true
+	}
+	return heads, nil
+}
+
 // Remotes는 등록된 원격 이름들을 돌려준다.
 func (r Runner) Remotes(ctx context.Context, repo Repo) ([]string, error) {
 	out, err := r.git(ctx, repo.Root, localTimeout, "remote")
