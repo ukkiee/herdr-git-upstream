@@ -40,28 +40,33 @@ worktree 삭제는 경계에 걸쳐 있다. herdr-shear가 이미 잘하지만 �
 
 | 기능 | 상태 |
 | --- | --- |
-| 주기적 fetch (기본 60초, 저장소당 120초 스로틀) | 완료 |
+| 주기적 fetch (기본 60초, 저장소당 같은 참조 120초 스로틀) | 완료 |
 | `$behind` / `$ahead` / `$sync_stale` 토큰 보고 | 완료 |
 | 새 worktree 를 기준 브랜치 최신으로 빨리 감기 | 완료 |
+| 0. `setup` 설정 안내와 `status` 설정 진단 | 완료 (`cb9ea33`) |
+| 1·2. `$gone` / `$merged` / `$catchup` 판정 | 완료 (`d38cb4c`) |
+| 3. worktree 화면, 안전 판정 재확인과 삭제 | 완료 (`14a9820`, `889c9fe`) |
+| 4. 기준 브랜치를 고르는 생성 팝업 | 완료 (`4dcf54c`) |
+| 영문·한국어 README, 0.2.0 문서 정리 | 완료 |
+| 전체 교차 기능 검토 / herdr 연결 실측 | 진행 예정. 아래 순서대로 확인 |
 
-시험 53개가 통과하고 여섯 플랫폼에서 교차 컴파일된다. 아직 herdr 에 붙이지 않았다.
-
-구조는 이렇다. 별표는 앞으로 생길 디렉터리다.
+2026-09-10 현재 전체 13개 패키지의 race 시험, vet, 여섯 플랫폼(linux/darwin/windows × amd64/arm64)
+교차 컴파일과 매니페스트 TOML 검사를 통과했다. Windows 실행은 미실측이다. 아직 herdr 에 붙이지 않았다.
 
 ```
 cmd/herdr-git-upstream/   명령 진입점
 internal/config/          설정 읽기, 토큰 이름 검사
 internal/daemon/          갱신 루프, 잠금, 쪽지, 워크스페이스 훑기
-internal/freshen/         새 worktree 최신화
+internal/freshen/         새 worktree 최신화, 명시적으로 고른 생성 기준 보호
 internal/gitrepo/         저장소 찾기, upstream 해석, fetch, 빨리 감기, 판정 재료
 internal/herdrcli/        herdr CLI 감싸기
 internal/herdrpaths/      herdr 와 같은 규칙으로 디렉터리 찾기
-internal/state/           fetch 기록, 데몬 잠금
-internal/herdrconfig/  *  사용자 config.toml 을 파싱 없이 훑기 (setup 과 경로 미리보기가 공유)
-internal/setup/        *  붙여 넣을 설정을 만들어 출력
-internal/judge/        *  gone / merged / 따라잡기 판정과 worktree 판정 규칙
-internal/tui/          *  의존성 없는 터미널 화면 기반 (raw 모드, 키 입력, 그리기)
-internal/worktreeui/   *  worktree 화면과 생성 팝업
+internal/state/           fetch·따라잡기·생성 보호 기록, 데몬 잠금
+internal/herdrconfig/     사용자 config.toml 훑기 (setup 과 경로 미리보기가 공유)
+internal/setup/           붙여 넣을 설정을 만들어 출력
+internal/judge/           gone / merged / 따라잡기 판정과 worktree 판정 규칙
+internal/tui/             터미널 화면 기반 (raw 모드, 키 입력, 그리기)
+internal/worktreeui/      worktree 화면과 생성 팝업
 ```
 
 ## 실측으로 확인한 사실
@@ -91,7 +96,7 @@ internal/worktreeui/   *  worktree 화면과 생성 팝업
   그중 조상 관계로 병합이 잡히는 것은 0개, merge-tree 비교로 잡히는 것은 7개다. 병합 대상은
   `origin/main` 이 아니라 `origin/widget-studio/dev` 인 경우가 많다.
 
-## 앞으로 넣을 것
+## 구현 명세 (0~4 완료)
 
 ### 0. `setup` 명령
 
@@ -190,7 +195,7 @@ fetch 기록의 `LastErrorPermanent` 가 이미 그 사실을 담고 있으므�
 통합 브랜치 각각을 별도의 fetch 작업으로 둔다. 현재 브랜치가 곧 통합 브랜치면 FetchKey 가 같아 한 번만
 가져간다. 스로틀은 기존 규칙을 그대로 따른다.
 
-**한계는 문서에 적는다.** `merged` 는 놓칠 수 있어도 틀리지는 않는다. 주된 신호는 `gone` 이다.
+**한계는 문서에 적는다.** `merged` 는 HEAD 내용의 포함 여부다. 실제 병합 이력이나 작업 완료를 보증하지 않으며, 다른 브랜치가 HEAD에서 갈라진 경우에도 조상 검사가 성립한다. 주된 신호는 `gone` 이다.
 
 ### 2. 따라잡을 때 충돌하는지 미리 보기 (`$catchup`)
 
@@ -207,7 +212,7 @@ fetch 기록의 `LastErrorPermanent` 가 이미 그 사실을 담고 있으므�
 
 - 뒤처짐이 0보다 클 때만 계산한다.
 - 결과를 (HEAD, 추적 참조 커밋) 쌍과 함께 fetch 기록에 저장하고, 쌍이 같으면 다시 계산하지 않는다.
-- git 2.38 미만이면 이 토큰만 조용히 쉰다. 나머지 기능은 git 2.5 이상에서 돈다.
+- git 2.38 미만이면 이 토큰만 조용히 쉰다. fetch 옵션은 git 2.29 이상이 필요하며, worktree 잠금·prunable 정보를 포함한 전체 기본 기능은 git 2.31 이상을 요구한다.
 
 ### 3. worktree 화면
 
@@ -360,7 +365,7 @@ herdr 의 자리 규칙을 그대로 쓴다.
 모두 마친 뒤 한 번에 한다. 삭제처럼 되돌릴 수 없는 동작은 실제 저장소가 아니라 임시 저장소에서만
 시험한다.
 
-## 터미널 화면 기반 (3번에서 만든다)
+## 터미널 화면 기반 (3번에서 구현)
 
 의존성 없이 간다. raw 모드는 플랫폼마다 다르지만 표준 라이브러리로 닿는다.
 
@@ -375,10 +380,9 @@ herdr 의 자리 규칙을 그대로 쓴다.
 
 ## 문서 마무리
 
-- README 는 지금 한국어로 둔다. 작업이 끝나면 영문을 `README.md` 로 기본으로 두고, 한국어는
-  `README.ko.md` 로 옮겨 서로 링크한다.
-- 판 번호를 0.2.0 으로 올린다.
-- HERDR.md 에 이번에 실측한 herdr 동작(plugin pane open 통로, worktree CLI 옵션, 기본 키, worktree 뿌리 설정)을 더한다.
+- 영문 `README.md` 를 기본으로 두고, 한국어 `README.ko.md` 와 서로 링크한다.
+- 실행 파일과 매니페스트의 판 번호는 0.2.0 이다.
+- HERDR.md 에 herdr 0.9.0 의 CLI 통로, 오류 봉투, 기본 키와 worktree 뿌리 설정을 기록했다.
 
 ## 열린 질문
 

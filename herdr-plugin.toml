@@ -1,6 +1,6 @@
 id = "git-upstream"
 name = "Git Upstream"
-version = "0.1.0"
+version = "0.2.0"
 # 0.7.5 부터 workspace 메타데이터 토큰과 [[startup]] 훅을 모두 쓸 수 있다.
 min_herdr_version = "0.7.5"
 description = "Keep git remote-tracking refs fresh so the herdr sidebar shows how far behind each Space really is, fetch in the background, and start new worktrees from the latest upstream. Linux, macOS, Windows."

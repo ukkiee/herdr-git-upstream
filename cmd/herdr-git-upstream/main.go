@@ -34,7 +34,7 @@ import (
 	"herdr-git-upstream/internal/worktreeui"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 // pluginID는 매니페스트(herdr-plugin.toml)의 id 다. 자기 pane 을 열 때 herdr 에게 이 이름으로 말한다.
 const pluginID = "git-upstream"

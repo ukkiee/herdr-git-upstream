@@ -1,6 +1,9 @@
 # herdr-git-upstream
 
-**pull 받아야 하는 저장소를 herdr 사이드바에서 바로 알아본다.** Linux, macOS, Windows에서 동작한다.
+**English** | [한국어](README.ko.md)
+
+**See which repositories need a pull, directly in the herdr sidebar.** Targets Linux, macOS, and Windows.
+Windows has been cross-compiled only; console and popup behavior have not been tested at runtime.
 
 ```
 ● mfe                 widget-studio/dev   ↓3
@@ -9,74 +12,78 @@
 ● msa                 widget-studio/dev
 ```
 
-## 왜 필요한가
+## Why it exists
 
-herdr는 사이드바에 앞뒤 커밋 수를 그린다. 그런데 그 숫자는 `HEAD`와 **로컬에 저장된** 원격 추적
-참조를 비교한 값이고, herdr는 그 참조를 스스로 갱신하지 않는다. 유지보수자도 이를 명시했다.
+herdr shows ahead and behind counts in its sidebar, but those counts compare `HEAD` with remote-tracking
+refs **stored locally**. herdr does not refresh those refs itself. Its maintainer confirmed this:
 
 > herdr performs small, cached reads in a background thread and never runs `git fetch`.
 > ([herdr#1253](https://github.com/herdrdev/herdr/issues/1253))
 
-그래서 동료가 방금 올린 커밋이 있어도, 누군가 그 저장소에서 `git fetch`를 하기 전까지는 사이드바에
-아무 변화가 없다. 이 플러그인이 그 fetch를 맡는다.
+A teammate can push new commits without anything changing in your sidebar until someone runs `git fetch`
+in that repository. This plugin handles that fetch.
 
-## 무엇을 하는가
+## What it does
 
-1. herdr에 열려 있는 저장소들의 원격 추적 참조를 주기적으로 갱신한다. 이것만으로 herdr의 내장
-   `git_status` 토큰이 실제 원격 상태를 가리키게 된다.
-2. 워크스페이스마다 `$behind`와 `$ahead` 토큰을 보고하고, 그 브랜치가 원격에서 끝난 작업인지
-   (`$gone`, `$merged`)와 따라잡을 때 충돌하는지(`$catchup`)를 함께 보고한다.
-3. 새로 만든 worktree를 원격의 최신 상태로 맞춘다.
-4. 한 저장소의 worktree 전부를 판정과 함께 표로 보이고, 끝난 것을 지우는 [worktree 화면](#worktree-화면)을 연다.
-5. [생성 팝업](#생성-팝업)에서 최신 원격 후보를 비교하고 새 worktree의 기준 브랜치를 고른다.
+1. Periodically refreshes remote-tracking refs for repositories open in herdr. This alone lets herdr's
+   built-in `git_status` token reflect the remote state.
+2. Reports `$behind` and `$ahead` for each workspace, together with signals that work may be finished
+   (`$gone`, `$merged`) and whether catching up would conflict (`$catchup`).
+3. Brings newly created worktrees up to date with their remote base.
+4. Opens a [worktree screen](#worktree-screen) listing every worktree in a repository with its assessment,
+   and lets you remove those classified as finished.
+5. Opens a [creation popup](#creation-popup) for comparing refreshed remote candidates and choosing a
+   base branch for a new worktree.
 
-두 번째가 필요한 이유가 있다. herdr는 같은 저장소를 공유하는 워크스페이스들을 묶어서 들여쓰는데,
-**들여쓴 행에서는 내장 `branch`와 `git_status` 토큰을 지운다.** worktree를 여러 개 열어 두고 쓰는
-사람에게는 오히려 그 행이 더 중요하다. 커스텀 토큰은 그 행에서도 그려지므로, 토큰을 쓰면 어느
-행에서나 같은 정보가 보인다.
+The second item matters because herdr groups workspaces that share a repository and indents their rows.
+**Indented rows omit the built-in `branch` and `git_status` tokens.** Those rows are particularly useful
+when you work with several worktrees. Custom tokens still render there, so every row can show the same
+information.
 
-세 번째는 다른 문제를 푼다. herdr는 worktree를 만들 때 fetch를 하지 않고, 기준 커밋으로 원본
-체크아웃의 `HEAD`를 그대로 쓴다.
+The third item addresses a different problem. When herdr creates a worktree, it does not fetch: it uses
+the source checkout's `HEAD` as the default base commit.
 
 ```rust
 // herdr src/app/api/worktrees/deferred.rs:118
 let base = params.base.unwrap_or_else(|| "HEAD".into());
 ```
 
-그래서 손에 쥔 main이 원격보다 다섯 커밋 뒤처져 있으면, 방금 만든 worktree도 다섯 커밋 뒤처진
-자리에서 시작한다. 새 작업을 낡은 바닥 위에 쌓는 셈이라 나중에 병합할 때 값을 치른다. 참조를
-부지런히 갱신하는 것만으로는 풀리지 않는다. fetch는 `refs/remotes/*`를 움직일 뿐 로컬 브랜치의
-`HEAD`는 그대로 두기 때문이다. 그래서 만들어진 직후에 한 번 앞으로 감아 준다.
+If your local main is five commits behind the remote, a new worktree starts five commits behind too.
+Building on that older base can make a later merge harder. Refreshing refs alone cannot fix this:
+fetch moves `refs/remotes/*`, while the local branch's `HEAD` stays put. The plugin therefore attempts
+one fast-forward immediately after creation.
 
-## 설치
+## Installation
 
 ```sh
 herdr plugin install <owner>/herdr-git-upstream
 ```
 
-로컬에서 개발 중이라면 이렇게 붙인다.
+For local development, link your checkout:
 
 ```sh
 herdr plugin link /Users/ukyi/personal/herdr-git-upstream
 ```
 
-설치할 때 herdr가 `go build`를 한 번 돌린다. Go 1.24 이상이 필요하며, 표준 라이브러리만 쓰므로
-내려받을 의존성은 없다.
+Requires herdr 0.7.5 or later, Go 1.24 or later, and Git 2.31 or later. herdr runs `go build` once during
+installation. The plugin uses only the standard library, so there are no dependencies to download.
 
-## 사이드바 설정
+## Sidebar setup
 
-**이 설정을 넣기 전에는 아무것도 보이지 않는다.** herdr는 사이드바 설정이 요청한 토큰만 그린다.
+**Nothing appears until you configure the sidebar.** herdr renders only the tokens requested by its
+sidebar configuration.
 
-붙여 넣을 내용은 `setup` 명령이 대신 만들어 준다. `config.toml`을 훑어 이미 들어 있는 것은 빼고
-남은 것만 보여 주며, 토큰 이름을 바꿨다면 바꾼 이름으로 만든다. **파일은 고치지 않는다.** 출력을
-붙여 넣는 것은 사람이 한다. 사이드바 토큰과 worktrees 키가 모두 들어 있으면 "설정이 모두 들어
-있습니다."라고만 답한다. 생성 팝업 키는 옵트인이라, 빠져 있어도 모두 들어 있는 것으로 본다.
+The `setup` command prints the configuration to paste. It reads `config.toml`, omits entries already
+present, and uses your configured token names if you renamed them. **It does not edit the file.** You
+paste the output yourself. When all sidebar tokens and the worktrees binding are present, it prints
+only `설정이 모두 들어 있습니다.` (all settings are present). The creation popup binding is opt-in, so
+its absence does not make the setup incomplete.
 
 ```sh
 ./bin/herdr-git-upstream setup
 ```
 
-손으로 넣는다면 `~/.config/herdr/config.toml`에 다음을 넣는다.
+To configure it manually, add this to `~/.config/herdr/config.toml`:
 
 ```toml
 [ui.sidebar.spaces]
@@ -98,8 +105,8 @@ rows = [
 herdr config check && herdr server reload-config
 ```
 
-worktree를 쓰지 않는다면 내장 `git_status`만으로도 충분하다. 그때는 토큰 없이 이렇게 두고,
-이 플러그인은 fetch만 맡게 하면 된다.
+If you do not use worktrees, the built-in `git_status` token may be enough. Keep the plugin responsible
+for fetching and use this layout without custom tokens:
 
 ```toml
 [ui.sidebar.spaces]
@@ -109,25 +116,26 @@ rows = [
 ]
 ```
 
-## 토큰
+## Tokens
 
-| 토큰 | 값 | 뜻 |
+| Token | Value | Meaning |
 |---|---|---|
-| `$behind` | `↓3` | 원격에 내가 아직 받지 않은 커밋이 3개 있다 |
-| `$ahead` | `↑1` | 내가 아직 올리지 않은 커밋이 1개 있다 |
-| `$gone` | `gone` | upstream 브랜치가 원격에서 사라졌다. 대개 병합된 뒤 지워진 것이다 |
-| `$merged` | `merged` | HEAD의 내용이 이미 어느 원격 브랜치에 들어가 있다 |
-| `$catchup` | `conflict` | 뒤처진 커밋을 따라잡으면 충돌한다. **충돌할 때만** 값이 있고, 깨끗하거나 뒤처지지 않았으면 빈 값이다 |
-| `$sync_stale` | `stale` | fetch가 오래 실패하고 있어 위 숫자를 믿을 수 없다 |
+| `$behind` | `↓3` | The remote has three commits you have not received |
+| `$ahead` | `↑1` | You have one commit you have not pushed |
+| `$gone` | `gone` | The upstream branch has disappeared from the remote, often after a merge |
+| `$merged` | `merged` | HEAD's contents are already present in a remote branch |
+| `$catchup` | `conflict` | Catching up would conflict. A value appears **only for conflicts**; it is empty when clean or not behind |
+| `$sync_stale` | `stale` | Fetch has been failing long enough that the counts may be stale |
 
-값이 0이거나 해당 사항이 없으면 토큰이 비고, herdr가 그 자리를 지운다. 저장소가 아니거나 커밋이
-하나도 없으면 아무것도 표시하지 않는다. HEAD가 분리되어 있거나 upstream이 없는 브랜치(아직 push 하지
-않은 새 브랜치)에서는 `$merged`만 판정한다. 방금 만든 빈 브랜치도 통합 브랜치의 조상이면 `merged`다.
+Zero or inapplicable values leave the token empty, and herdr removes its space. Nothing is shown outside
+a repository or before its first commit. For a detached HEAD or a branch without an upstream, such as a
+new branch not yet pushed, only `$merged` is assessed. A newly created branch with no commits of its own
+is also `merged` if it is an ancestor of an integration branch.
 
-## 설정
+## Configuration
 
-`herdr plugin config-dir git-upstream`가 알려 주는 디렉터리에 `config.json`을 둔다. 파일이 없으면
-모든 값이 기본값으로 동작한다.
+Place `config.json` in the directory reported by `herdr plugin config-dir git-upstream`. If the file does
+not exist, all settings use their defaults.
 
 ```json
 {
@@ -152,29 +160,29 @@ rows = [
 }
 ```
 
-| 항목 | 기본값 | 설명 |
+| Setting | Default | Description |
 |---|---|---|
-| `interval_seconds` | 60 | 전체 워크스페이스를 한 바퀴 도는 간격 (5초 ~ 24시간) |
-| `throttle_seconds` | 120 | 같은 저장소를 다시 가져오기까지의 최소 간격 |
-| `fetch_timeout_seconds` | 20 | 저장소 하나당 fetch 제한 시간 |
-| `stale_after_seconds` | 900 | 실패가 이만큼 이어지면 `stale`을 띄운다 |
-| `gone_token` | `gone` | upstream이 원격에서 사라졌을 때 보고할 토큰 이름 |
-| `gone_label` | `gone` | 그때 채우는 값 |
-| `merged_token` | `merged` | HEAD가 이미 어느 원격 브랜치에 들어가 있을 때 보고할 토큰 이름 |
-| `merged_label` | `merged` | 그때 채우는 값 |
-| `catchup_token` | `catchup` | 따라잡을 때 충돌하는지 알릴 토큰 이름 |
-| `catchup_conflict_label` | `conflict` | 충돌할 때만 채우는 값. 깨끗하면 빈 값이다 |
-| `fresh_worktrees` | true | 새로 만든 worktree를 원격의 최신 상태로 맞춘다 |
-| `enabled` | true | false로 두면 이 플러그인이 올린 토큰을 지우고 쉰다 |
+| `interval_seconds` | 60 | Interval between passes over all workspaces, from 5 seconds to 24 hours |
+| `throttle_seconds` | 120 | Minimum interval before fetching the same repository again |
+| `fetch_timeout_seconds` | 20 | Fetch timeout per repository |
+| `stale_after_seconds` | 900 | Show `stale` after failures have continued this long |
+| `gone_token` | `gone` | Token name reported when the upstream disappears from the remote |
+| `gone_label` | `gone` | Value reported in that case |
+| `merged_token` | `merged` | Token name reported when HEAD is already present in a remote branch |
+| `merged_label` | `merged` | Value reported in that case |
+| `catchup_token` | `catchup` | Token name used to report catch-up conflicts |
+| `catchup_conflict_label` | `conflict` | Value reported only for conflicts; empty when clean |
+| `fresh_worktrees` | true | Bring newly created worktrees up to date with their remote base |
+| `enabled` | true | When false, clear the plugin's tokens and stop doing work |
 
-토큰 이름을 빈 문자열로 두면 그 토큰은 보고하지 않는다. 설정은 매 회차마다 다시 읽으므로
-herdr를 재시작하지 않아도 주기를 바꿀 수 있다.
+An empty token name disables reporting for that token. Configuration is reread on every pass, so you
+can change the interval without restarting herdr.
 
-## worktree 화면
+## Worktree screen
 
-worktree를 열 개 넘게 열어 두면 어느 것이 끝난 작업인지 사람이 기억하지 못한다. 사이드바 토큰은 한 줄에
-조금씩만 보여 줄 수 있어서, 한눈에 견주려면 화면이 필요하다. 한 저장소의 worktree 전부를 판정과 함께
-표로 보이고, `safe`인 것만 지운다.
+With more than a handful of worktrees, remembering which jobs are finished becomes difficult. Sidebar
+tokens have limited room. The worktree screen lists all worktrees in one repository with an assessment
+and removes only those marked `safe`.
 
 ```
  mfe · 27 worktrees                     fetched 3s ago    ↑↓ move  ⏎ open  r refresh
@@ -192,281 +200,306 @@ worktree를 열 개 넘게 열어 두면 어느 것이 끝난 작업인지 사�
  2 safe · d remove selected · D remove all safe · q close
 ```
 
-**여는 길은 셋이다.**
+**There are three ways to open it.**
 
-| 통로 | 쓰임새 |
+| Entry point | Use |
 | --- | --- |
-| 키 설정 (`type = "plugin_action"`, `git-upstream.worktrees`) | 평소 사용. `setup`이 이 설정을 내놓는다 |
-| `herdr plugin action invoke worktrees --plugin git-upstream` | 스크립트나 시험 |
-| `herdr-git-upstream worktrees [--cwd <path>]` | 터미널에서 직접. 데몬 없이도, herdr 없이도 돈다 |
+| Key binding (`type = "plugin_action"`, `git-upstream.worktrees`) | Everyday use; `setup` prints this binding |
+| `herdr plugin action invoke worktrees --plugin git-upstream` | Scripts and testing |
+| `herdr-git-upstream worktrees [--cwd <path>]` | Directly in a terminal; works without the daemon or herdr |
 
-앞의 둘은 herdr 팝업 pane으로 열리고, 마지막은 지금 있는 페인에 그대로 그린다. herdr에는 액션을 골라
-실행하는 화면이 없으므로 **키에 묶기 전에는 없는 것과 같다.** 어느 저장소인지는 액션으로 열면
-`HERDR_WORKSPACE_ID`가 속한 저장소, 터미널에서 부르면 현재 디렉터리(`--cwd`를 주면 그것)다. 그 자리가 git
-저장소가 아니면 `not a git repository: <경로>`를 적고 종료 코드 1로 끝난다. herdr에 닿지 않으면
-`git worktree list`로 대신하되 제목 줄에 `herdr unavailable`이 보이고, 그때는 "herdr에 열려 있음" 정보가
-없어 Enter로 옮겨 갈 수 없다.
+The first two open a herdr popup pane. The last draws in the current pane. herdr has no action picker,
+so **bind the action to a key to make it readily accessible**. An action uses the repository belonging
+to `HERDR_WORKSPACE_ID`; a terminal invocation uses the current directory, or `--cwd` when supplied.
+If that location is not a Git repository, the command prints `not a git repository: <path>` and exits
+with code 1. If herdr is unavailable, the screen falls back to `git worktree list`, shows
+`herdr unavailable` in the header, and lacks information about open herdr workspaces. Enter cannot
+switch workspaces in that mode.
 
-**열릴 때 스스로 원격을 본다.** 데몬은 herdr에 열린 워크스페이스만 돌기 때문에 나머지 worktree의 상태를
-모른다. 열자마자 로컬 참조로 표를 먼저 그리고, 배경에서 `git fetch`(전체 브랜치, 왕복 한 번)와
-`git ls-remote --heads`(사라진 브랜치 판정, 왕복 한 번)를 나란히 돌린 뒤 다시 그린다. **prune은 하지
-않는다.** 사용자의 참조를 건드리지 않는다는 약속은 여기서도 같다. 화면의 `gone`은 `ls-remote` 결과에
-그 브랜치가 없는 것이고, 그 결과가 없을 때만 데몬의 fetch 기록으로 판정한다. fetch가 실패하면 제목 줄에
-`fetch failed`로만 보이고 표는 로컬 자료로 남는다. `r`로 다시 돌린다.
+**The screen checks the remote when opened.** The daemon visits only workspaces open in herdr, so it
+does not know the state of every other worktree. The screen first renders local refs, then runs
+`git fetch` for all branches and `git ls-remote --heads` for deleted-branch detection in parallel, one
+remote round trip each, and renders again. **It does not prune.** It does not delete your refs. On this
+screen, `gone` means the branch is absent from the `ls-remote` result; only when that result is
+unavailable does it fall back to the daemon's fetch records. If fetch fails, the header shows
+`fetch failed` and the table retains its local data. Press `r` to retry.
 
-**판정.**
+**Assessments.**
 
-| 판정 | 조건 |
+| Assessment | Conditions |
 | --- | --- |
-| `blocked` | 본 체크아웃이거나, `git worktree lock`으로 잠겼거나, 디렉터리가 사라졌거나, herdr에서 에이전트가 일하는 중. 지울 수 없다 |
-| `safe` | 손대지 않았고(추적되지 않은 파일까지 없음), `merged`이거나 (`gone`이면서 앞선 커밋이 0임을 확인할 수 있음). 끝난 일이다 |
-| `review` | 손댄 것이 있거나, 따라잡을 때 충돌하거나, `gone`인데 앞선 커밋이 있거나 확인할 수 없음(추적 참조가 이미 지워짐) |
-| `keep` | 그 밖의 전부. 최신이거나 깨끗하게 따라잡을 수 있는 진행 중인 작업 |
+| `blocked` | The main checkout, a worktree locked with `git worktree lock`, a missing directory, or an agent working in herdr. Cannot be removed |
+| `safe` | Clean, including no untracked files, and either `merged` or `gone` with a verified ahead count of zero. Classified as finished |
+| `review` | Dirty, would conflict when catching up, or `gone` with unpushed commits or an unknown ahead count because its tracking ref was already deleted |
+| `keep` | Everything else: work in progress that is up to date or can catch up cleanly |
 
-정렬은 판정 순서(safe, review, keep, blocked) 다음 브랜치 이름이다. 설명 열은 사이드바 토큰과 같은
-판정 함수가 낸 조각들이라 두 자리가 다른 답을 내지 않는다.
+Rows are sorted by assessment (`safe`, `review`, `keep`, `blocked`), then branch name. Descriptions use
+the same assessment functions as the sidebar tokens.
 
-**키.**
+**Keys.**
 
-| 키 | 동작 |
+| Key | Action |
 | --- | --- |
-| `↑` `↓` `j` `k` | 이동 |
-| `Enter` | herdr에 열려 있으면 그 워크스페이스로, 아니면 `herdr worktree open --path <경로> --focus`. 그리고 화면을 닫는다 |
-| `d` | 선택한 것이 `safe`면 확인 없이 지운다. 아니면 이유를 아래 줄에 보여 준다 |
-| `D` | `safe` 전부를 "Remove N worktrees? y/N" 한 번 묻고 지운다 |
-| `r` | 다시 fetch |
-| `q` `Esc` `Ctrl-C` | 닫기 |
+| `↑` `↓` `j` `k` | Move |
+| `Enter` | Select the workspace if open in herdr; otherwise run `herdr worktree open --path <path> --focus`. Then close the screen |
+| `d` | Remove the selected worktree without confirmation if `safe`; otherwise show the reason in the footer |
+| `D` | Ask `Remove N worktrees? y/N` once, then remove all confirmed `safe` worktrees |
+| `r` | Fetch again |
+| `q` `Esc` `Ctrl-C` | Close |
 
-**삭제 규칙.** `safe`인 것만 지운다. herdr에 열려 있으면 `herdr worktree remove --workspace <id>`,
-디스크에만 있으면 `git worktree remove <경로>`다. **강제 삭제는 없다.** 삭제 직전에 대상과 HEAD,
-안전 판정을 다시 확인하고, 바뀌었으면 거절한다. 파일 변경은 herdr와 git도 마지막 문턱에서 확인한다.
-`D`는 확인창을 열 때의 대상만 지우며, 배경 갱신이 대상을 늘리지 않는다. 삭제 도중 닫기를 요청하면
-진행 중인 삭제가 끝난 뒤 닫는다. 에이전트 상태를 조회하지 못한 열린 worktree도 삭제하지 않는다.
-브랜치는 남긴다. 확인 물음은 `D`에만 둔다. 근거는
-[ADR 0002](docs/adr/0002-removal-boundary.md)에 있다.
+**Removal rules.** Only `safe` worktrees can be removed. For one open in herdr, the screen runs
+`herdr worktree remove --workspace <id>`; for one only on disk, `git worktree remove <path>`.
+**Removal is never forced.** Immediately before removal, it rechecks the target, HEAD, and safety
+assessment, and refuses if they changed. herdr and Git also check file changes at the final removal
+boundary. `D` removes only the targets shown when the confirmation opened; background refresh cannot
+expand that set. A close request during removal waits for the in-flight removal to finish. An open
+worktree whose agent state cannot be queried is also protected from removal. Branches are kept.
+Only `D` requires confirmation; [ADR 0002](docs/adr/0002-removal-boundary.md) explains the decision.
 
-윈도우에서는 교차 컴파일까지만 확인했다. 콘솔 raw 모드와 팝업 pane 의 상대 경로 명령은 실측하지 못했다.
+On Windows, only cross-compilation has been checked. Console raw mode and relative commands in popup
+panes have not been tested at runtime.
 
-## 생성 팝업
+## Creation popup
 
-`herdr-git-upstream new-worktree [--cwd <path>]`는 새 worktree의 기준 브랜치를 고르는 화면이다.
-herdr 기본 팝업은 현재 HEAD에서 시작하지만, 이 팝업에서는 현재 브랜치, 그 upstream, 원격 기본
-브랜치, 저장소에 설정한 통합 브랜치를 순서대로 보여 준다. 같은 참조는 한 번만 나온다.
+`herdr-git-upstream new-worktree [--cwd <path>]` opens a screen for choosing a new worktree's base branch.
+herdr's built-in popup starts from the current HEAD. This popup lists the current branch, its upstream,
+the remote default branch, and the repository's configured integration branches, in that order.
+Each distinct ref appears once.
 
-`herdr plugin action invoke new-worktree --plugin git-upstream`으로 herdr pane에 열 수 있다.
-키로 사용하려면 `setup` 출력의 `git-upstream.new-worktree` 주석 블록을 활성화한다. 기본 키는
-바꾸지 않는다. 생성에는 실행 중인 herdr가 필요하다.
+Use `herdr plugin action invoke new-worktree --plugin git-upstream` to open it in a herdr pane. To bind
+it to a key, enable the commented `git-upstream.new-worktree` block in the `setup` output. It does not
+replace the default key binding. Creation requires a running herdr server.
 
-이름은 기준 브랜치에서 가져오되 로컬 브랜치, 원격 추적 브랜치, worktree에서 쓰는 이름을 피한다.
-이미 사용 중이면 `-2`, `-3` 순으로 찾는다. `feature-2` 다음 후보는 `feature-3`이다.
-처음에는 자동 이름 전체가 선택되어 있어 바로 타이핑해 바꿀 수 있다. 이름을 직접 고친 뒤에는
-기준을 바꿔도 입력을 덮어쓰지 않는다.
+The suggested name comes from the base branch and avoids names already used by local branches,
+remote-tracking branches, or worktrees. If occupied, it tries `-2`, `-3`, and so on. The next suggestion
+after `feature-2` is `feature-3`. The entire suggested name starts selected, so typing replaces it.
+Once you edit the name, changing the base no longer overwrites your input.
 
-| 키 | 동작 |
+| Key | Action |
 | --- | --- |
-| `Tab` | 이름 칸과 기준 목록 전환 |
-| `↑` `↓` | 기준 목록에서 선택 이동 |
-| 문자·`Backspace` | 이름 입력·수정 |
-| `Enter` | 선택한 기준으로 생성 |
-| `Esc` `Ctrl-C` | 취소 |
+| `Tab` | Switch between the name field and base list |
+| `↑` `↓` | Move the selection in the base list |
+| Characters and `Backspace` | Enter or edit the name |
+| `Enter` | Create from the selected base |
+| `Esc` `Ctrl-C` | Cancel |
 
-원격 후보는 화면을 연 뒤 좁게 fetch하며, 기다리는 동안에도 이름과 기준을 고를 수 있다.
-선택한 원격 후보를 가져오기 전에는 생성하지 않는다. fetch가 실패했다면 팝업을 다시 열어 재시도한다.
-경로는 `[worktrees] directory` 아래의 저장소 이름과 herdr 슬러그 규칙으로 미리 보여 준다.
-실제 위치는 `--path`를 지정하지 않고 herdr가 결정한다.
+Remote candidates are fetched individually after the popup opens. You can edit the name and choose a
+base while waiting. Creation waits for the selected remote candidate to finish fetching. If its fetch
+fails, reopen the popup to retry. The path preview combines `[worktrees] directory`, the repository
+name, and herdr's branch slug rules. The command does not pass `--path`; herdr chooses the actual path.
 
-원격 추적 참조에서 **새 브랜치**를 만들었으면 자동으로 설정된 upstream을 해제한다. 그렇지 않으면
-`git pull`과 사이드바 숫자가 기능 브랜치 대신 main 같은 기준 브랜치를 계속 따라가기 때문이다.
-첫 push에서 upstream을 설정하면 토큰이 다시 나타난다. 기존 브랜치 이름을 직접 입력한 경우에는
-herdr가 그 브랜치를 열고, 기존 upstream 설정을 보존한다. 명시적으로 선택한 원격 기준과 기존
-브랜치는 자동 최신화 훅으로 옮기지 않는다. 이전에 완료된 생성의 이름을 새 현재 브랜치 기준으로 다시 쓰면
-일반 자동 최신화 흐름을 따른다.
+When creating a **new branch** from a remote-tracking ref, the plugin unsets the automatically assigned
+upstream. Otherwise, `git pull` and the sidebar counts would keep following the base branch, such as
+main, instead of the feature branch. Set an upstream on the first push to restore those tokens.
+If you manually enter an existing branch name, herdr opens that branch and the plugin preserves its
+upstream. The automatic freshening hook does not move an explicitly selected remote base or an existing
+branch. If a completed creation's name is later reused for a new branch based on the current branch,
+the normal automatic freshening flow applies.
 
-## 동작 방식
+## How it works
 
 ```
-herdr startup 훅 ─┐
-                  ├─► 데몬 (herdr 바깥에서 계속 돎)
-포커스 이벤트 ────┘        │
-  쪽지만 남기고 즉시 끝남   ├─ 저장소마다 좁은 fetch (현재 브랜치와 통합 브랜치)
-                           ├─ 워크스페이스마다 gone / merged / catchup 판정
-                           └─ 워크스페이스마다 토큰 보고
+herdr startup hook ─┐
+                    ├─► daemon (runs outside herdr)
+focus events ───────┘       │
+  write a note, then exit   ├─ narrow fetches per repository (current and integration branches)
+                           ├─ gone / merged / catchup assessment per workspace
+                           └─ token reporting per workspace
 ```
 
-몇 가지 결정에는 이유가 있다.
+Several design choices have specific reasons.
 
-**이벤트 훅은 fetch를 하지 않는다.** herdr는 동시에 도는 플러그인 명령을 32개로 제한한다. 포커스는
-자주 바뀌고 fetch는 느리다. 훅이 그 자리를 수십 초씩 차지하면 탭 이름을 바꾸는 것 같은 다른
-플러그인의 훅까지 밀린다. 그래서 훅은 파일 하나를 쓰고 곧바로 끝나며, 실제 작업은 herdr 바깥의
-데몬이 맡는다.
+**Event hooks do not fetch.** herdr limits concurrent plugin commands to 32. Focus changes frequently,
+and fetching is slow. If a hook occupies a slot for tens of seconds, it delays other plugins' hooks,
+such as those that rename tabs. Hooks therefore write a file and return immediately; a daemon outside
+herdr does the actual work.
 
-**포커스 이벤트가 데몬을 되살린다.** herdr의 startup 훅은 서버가 세션을 복구할 때만 발화하고,
-사용자가 플러그인을 방금 link하거나 enable했을 때는 발화하지 않는다. 포커스 이벤트가 데몬 생존을
-확인하도록 해 두어, 설치 직후 herdr를 재시작하지 않아도 곧 동작하기 시작한다.
+**Focus events revive the daemon.** herdr fires its startup hook when the server restores a session,
+but not when you have just linked or enabled a plugin. Focus events check whether the daemon is alive,
+so the plugin can start working after installation without a herdr restart.
 
-**fetch는 좁게 하고, 사용자의 작업을 건드리지 않는다.** 참조를 하나씩 좁게 가져오고(현재 브랜치의
-upstream과 통합 브랜치 각각), 태그와 prune과 하위 모듈은 손대지 않으며 자동 정리(`gc.auto`)도 꺼 둔다. `--no-write-fetch-head`로
-`FETCH_HEAD`를 다시 쓰지 않는데, 이것이 없으면 사용자가 손으로 fetch한 뒤 `git merge FETCH_HEAD`를
-하려던 참에 엉뚱한 커밋을 병합하게 된다. `GIT_OPTIONAL_LOCKS=0`으로 부가적인 잠금도 잡지 않는다.
+**Daemon fetches are narrow and leave your work alone.** They fetch one ref at a time: the current
+branch's upstream and each integration branch. They leave tags, pruning, and submodules alone and
+disable automatic garbage collection with `gc.auto`. `--no-write-fetch-head` prevents rewriting
+`FETCH_HEAD`; otherwise, a user who manually fetched and was about to run `git merge FETCH_HEAD` could
+merge the wrong commit. `GIT_OPTIONAL_LOCKS=0` also avoids optional locks.
 
-**ssh 설정은 사용자 것을 그대로 둔다.** 전용 키나 ProxyCommand를 쓰려고 `GIT_SSH_COMMAND`나
-`core.sshCommand`를 지정해 둔 사람의 설정을 덮으면 fetch 자체가 실패한다. 둘 다 없을 때만 비대화형
-ssh를 지정하며, 그 경우에도 멈춤은 제한 시간이 걷어 낸다.
+**Your SSH settings are preserved.** Overriding `GIT_SSH_COMMAND` or `core.sshCommand` can break fetching
+for users with a dedicated key or ProxyCommand. The plugin supplies noninteractive SSH only when
+neither is configured. A timeout still bounds stalled commands.
 
-**원격과 추적 참조는 짐작하지 않고 git에게 묻는다.** 원격 이름은 `branch.<이름>.remote`에서 읽고,
-이름에 `/`가 들어갈 수 있으므로 모양으로 URL 여부를 단정하지 않고 등록 여부를 확인한다.
-`.`으로 적힌 로컬 추적 브랜치는 가져올 원격이 없으므로 건너뛴다. 추적 참조의 이름은 git에게 먼저 묻되,
-아직 한 번도 가져온 적 없는 브랜치에서는 git이 답하지 못하므로 원격에 설정된 fetch 참조 사양을 보고
-계산한다. 바로 그 브랜치가 이 플러그인이 도와야 할 자리이기 때문이다.
+**Git supplies the remote and tracking ref.** The remote comes from `branch.<name>.remote`. Remote names
+can contain `/`, so the plugin checks registered remotes instead of guessing whether a value is a URL.
+A local tracking branch configured with `.` has no remote to fetch and is skipped. Git is asked for the
+tracking ref first. If the branch has never been fetched and Git cannot resolve it, the plugin derives
+it from the remote's fetch refspec. That unfetched branch is one of the cases this plugin needs to help.
 
-**한 저장소를 두 번 가져오지 않는다.** 연결된 worktree들은 참조 저장소를 공유하므로, 같은 브랜치를
-보고 있는 워크스페이스들은 한 번의 fetch로 함께 최신이 된다. 서로 다른 브랜치라면 각각 가져온다.
+**Shared refs are fetched once.** Linked worktrees share their ref store, so workspaces tracking the
+same branch benefit from a single fetch. Different branches are fetched separately.
 
-**토큰에는 수명을 둔다.** 데몬이 죽으면 값이 저절로 사라진다. 사이드바에 낡은 숫자가 붙박이로
-남는 것이, 아무것도 없는 것보다 나쁘기 때문이다.
+**Tokens expire.** If the daemon dies, its values disappear automatically. A permanently stale number
+in the sidebar would be worse than no number.
 
-**잠금 갱신은 일하는 흐름과 떼어 놓는다.** 한 회차의 길이에는 상한이 없다. 응답 없는 원격 하나가
-제한 시간만큼 붙잡고 워크스페이스가 많으면 그것이 쌓인다. 갱신을 일하는 흐름 안에서 찍으면 그동안
-잠금이 낡아, 멀쩡히 일하는 데몬이 죽은 것으로 몰리고 다른 데몬이 잠금을 빼앗아 둘이 함께 돌게 된다.
+**Lock renewal runs separately from the work loop.** A pass has no fixed upper bound: an unresponsive
+remote can consume its timeout, and many workspaces add up. Renewing the lock inside that loop would
+let it grow stale while the daemon is still working, allowing another daemon to take over and run
+alongside it.
 
-**데몬은 herdr 서버마다 하나씩 둔다.** herdr는 세션마다 서버를 따로 두지만 플러그인 상태 디렉터리는
-하나다. 잠금을 나눠 쓰면 먼저 뜬 데몬이 다른 세션의 데몬까지 막아, 그 세션에는 영영 토큰이 오지 않는다.
+**Each herdr server gets its own daemon.** herdr uses a separate server per session, but one plugin state
+directory. Sharing a lock would let the first daemon prevent other sessions from starting theirs,
+leaving those sessions without tokens.
 
-**디렉터리는 herdr와 같은 규칙으로 찾는다.** herdr가 띄운 명령에는 위치가 환경변수로 들어오지만
-셸에서 직접 부를 때는 없다. 그때 다른 자리를 보면 설정이 통째로 무시되고, 잠금이 갈려 데몬이 둘 뜬다.
+**Directories follow herdr's rules.** Commands launched by herdr receive directory locations through
+environment variables; direct shell invocations do not. Looking elsewhere would ignore configuration
+and split the locks, allowing two daemons to start.
 
-**새 worktree는 빨리 감기로만 옮긴다.** 기준이 된 브랜치를 찾아 그것만 가져온 뒤 `merge --ff-only`로
-앞당긴다. 빨리 감기는 정의상 잃을 것이 없는 이동이므로, 사용자가 만든 것을 버릴 수 없다. 작업 트리가
-깨끗하지 않거나, 새 브랜치에 이미 커밋이 있거나, 기준으로 삼을 브랜치가 둘 이상이어서 모호하면
-아무것도 하지 않는다. 짐작해서 옮기느니 그대로 두는 편이 낫기 때문이다.
+**New worktrees move only by fast-forward.** The plugin identifies the base branch, fetches it, and
+runs `merge --ff-only`. A fast-forward preserves existing commits. If the worktree is dirty, the new
+branch already has its own commits, or multiple possible base branches make the choice ambiguous,
+it does nothing.
 
-**첫 실패로는 경고하지 않는다.** 잠시 끊긴 네트워크나 아직 연결하지 않은 VPN 때문에 곧바로
-`stale`이 뜨면, 정작 사람이 손봐야 하는 상황과 구별되지 않는다. 실패가 이어진 시간을 기준으로 삼는다.
+**A first failure does not trigger a warning.** A brief network interruption or disconnected VPN should
+not immediately show `stale` and compete with problems that need attention. The warning depends on how
+long failures have continued.
 
-**`gone`은 fetch 실패에서 읽는다.** 현재 브랜치의 upstream을 참조 하나로 좁게 가져오므로, 원격에서
-그 브랜치가 지워지면 fetch가 "원격 참조 없음"으로 실패한다. 그 기록이 곧 `gone`이다. `ls-remote`도
-prune도 부르지 않으므로 값이 0이고, 사용자의 참조를 지우지도 않는다. 이 실패는 다시 시도해도 같으므로
-`stale`로 세지 않는다. 근거를 더 요구하지 않으므로 원격에서 지워지고 로컬에서 prune까지 된 뒤에 처음
-본 브랜치도 `gone`이다. 커밋이 하나도 없는 저장소만 뺀다. 빈 원격을 clone한 직후에도 git이
-`branch.main`을 잡아 두어 같은 실패가 나지만, 태어나지 않은 브랜치는 사라질 수 없기 때문이다.
+**The daemon derives `gone` from fetch failures.** It fetches the current branch's upstream as a single
+ref. If the branch was deleted remotely, fetching fails with a missing-remote-ref error; that record
+is the `gone` signal. This adds no `ls-remote` call or pruning and does not delete your refs. Because
+retrying cannot fix a missing branch, that failure does not count toward `stale`. No extra evidence is
+required, so a branch first seen after remote deletion and local pruning can still be `gone`. Repositories
+without any commits are excluded: Git configures `branch.main` even just after cloning an empty remote,
+which produces the same fetch error, but an unborn branch cannot have disappeared.
 
-**`merged`는 조상 검사와 merge-tree 비교로 판정한다.** 먼저 `git for-each-ref --contains HEAD
-refs/remotes/`로 자기 참조가 아닌 원격 브랜치가 HEAD를 품고 있는지 본다. 자기 참조란 원격마다 있는
-이 브랜치의 사본(`refs/remotes/<원격>/<브랜치>`)과 upstream 추적 참조다. push만 해도 사본은 HEAD를
-품으므로 그것은 근거가 아니고, `refs/pull/*/head`처럼 브랜치가 아닌 것을 가져오는 참조 사양의
-목적지도 세지 않는다. 로컬 명령 하나라 참조가 수백 개여도 값이 싸다. 그것으로 잡히지 않으면 통합
-브랜치마다 `git merge-tree --write-tree <통합> HEAD`를 돌려, 결과 트리가 통합 브랜치의 트리와
-같으면(병합해도 아무것도 바뀌지 않으면) `merged`로 본다. 이 비교가 squash 병합과 rebase 병합을
-잡는다. 근거는 [ADR 0001](docs/adr/0001-merged-judgement.md)에 있다.
+**`merged` uses ancestry checks and merge-tree comparisons.** First,
+`git for-each-ref --contains HEAD refs/remotes/` checks whether a remote branch other than the branch's
+own refs contains HEAD. Own refs include copies on every remote (`refs/remotes/<remote>/<branch>`) and
+the upstream tracking ref. A push alone makes those copies contain HEAD, so they are not evidence.
+Destinations of refspecs that fetch non-branch refs, such as `refs/pull/*/head`, do not count either.
+This is one local command, even with hundreds of refs. If ancestry does not establish inclusion, the
+plugin runs `git merge-tree --write-tree <integration> HEAD` for each integration branch. If the result
+tree equals the integration branch's tree, merging changes nothing and the branch is considered
+`merged`. This comparison detects squash and rebase merges. See
+[ADR 0001](docs/adr/0001-merged-judgement.md).
 
-통합 브랜치는 원격 기본 브랜치에 저장소별로 지정한 것을 더한 목록이다. 원격 기본 브랜치는
-`refs/remotes/<원격>/HEAD`가 실제 참조를 가리키면 그것이고(원격이 기본 브랜치를 바꾼 뒤 남은 낡은
-별명은 믿지 않는다), 없으면 fetch와 같은 자리에서 `ls-remote --symref`로 하루에 한 번 물어 기록하고
-그 회차부터 쓴다. 그것마저 실패해 끝내 모르면 `merged`를 판정하지 않는다. 통합 브랜치 자체를
-체크아웃한 자리를 가려낼 수 없어, 거기서 갈라져 나간 원격 브랜치 하나만 있어도 조상 검사가 `merged`를
-붙이기 때문이다. 작업이 `origin/main`이 아니라 `origin/develop` 같은 곳으로
-병합되는 저장소에서는 그 저장소에서 이렇게 알려 준다. 값은 여러 개 둘 수 있고, 연결된 worktree
-전부가 함께 쓴다.
+Integration branches combine the remote default branch with repository-specific additions. The remote
+default comes from `refs/remotes/<remote>/HEAD` when it points to an existing ref; a stale alias left
+after a remote default change is not trusted. Otherwise, the fetch phase queries `ls-remote --symref`
+once per day, records the answer, and uses it from that pass onward. If the default remains unknown,
+`merged` is not assessed: the plugin could not recognize a checkout of the integration branch itself,
+and a remote descendant branch would be enough for the ancestry check to label it `merged`.
+For repositories that merge into a branch such as `origin/develop` instead of `origin/main`, configure
+that repository as follows. Multiple values are allowed, and all linked worktrees share them.
 
 ```sh
 git config --add git-upstream.mergeTarget origin/develop
 ```
 
-**`merged`는 놓칠 수 있어도 틀리지는 않는다.** 병합 뒤 통합 브랜치가 같은 파일을 다시 고쳤으면
-merge-tree 비교로는 잡히지 않는다. 그래서 끝난 작업의 주된 신호는 `gone`이고, `merged`는 그것을
-보태는 신호다. 자기 참조는 근거로 삼지 않으므로 push만 한 브랜치가 그 이유만으로 `merged`가 되지는
-않고, 통합 브랜치 자체를 체크아웃한 자리(main 위의 main)는 아예 판정하지 않는다. 다만 조상 검사는
-"HEAD에서 갈라져 나간 브랜치"와 "HEAD가 병합된 브랜치"를 구별하지 못한다. 내 브랜치에서 남이
-갈라져 나가 push하면 그 참조가 HEAD를 품으므로 내 브랜치에 `merged`가 붙는다.
+**`merged` does not prove that a branch was merged.** If the integration branch changes the same files
+again after a merge, the merge-tree comparison can miss it. `gone` is therefore the primary signal of
+finished work, with `merged` as supporting evidence. Own refs are excluded, so merely pushing a branch
+does not mark it `merged`. A checkout of an integration branch itself is not assessed. However, the
+ancestry check cannot distinguish a branch created from HEAD from a branch that received HEAD through
+a merge. If someone branches from your branch and pushes it, that descendant ref contains your HEAD
+and can cause your branch to be marked `merged`.
 
-**`catchup`은 병합해 보되 작업 트리는 건드리지 않는다.** `git merge-tree --write-tree <추적 참조>
-HEAD`의 종료 코드로 충돌 여부를 안다. 뒤처짐이 0보다 클 때만 계산하고, 결과를 (HEAD, 추적 참조 커밋)
-쌍과 함께 브랜치마다의 따라잡기 기록에 남겨 쌍이 같으면 다시 계산하지 않는다. 같은 `origin/main`을
-따라가는 브랜치가 여럿이어도 서로의 캐시를 지우지 않고, fetch 기록과 다른 파일이라 판정이 다른
-세션의 데몬이 남긴 fetch 결과를 덮지도 않는다. 판정하지 못한 쌍(관계없는 역사, 제한 시간 초과)도
-남겨 한 시간 안에는 다시 시도하지 않는다. `merge-tree --write-tree`는 git 2.38에서 생겼으므로 그
-아래에서는 이 토큰만 조용히 쉬고, `merged`는 조상 검사만 한다. `status`의 `merge_tree_supported`가
-그 사실을 알려 준다.
+**`catchup` tests a merge without changing the worktree.** The exit code of
+`git merge-tree --write-tree <tracking-ref> HEAD` indicates whether catching up would conflict. It runs
+only when the behind count is greater than zero. Results are stored per branch with the pair of HEAD
+and tracking-ref commits, and reused while that pair is unchanged. Branches sharing `origin/main` do
+not evict each other's cached results. These records also live separately from fetch records, so an
+assessment cannot overwrite fetch results written by another session's daemon. Pairs that could not
+be assessed, such as unrelated histories or timeouts, are recorded too and are not retried for an hour.
+`merge-tree --write-tree` was introduced in Git 2.38. Older versions omit this token and use ancestry
+alone for `merged`. The `merge_tree_supported` field in `status` reports support.
 
-**통합 브랜치도 함께 가져온다.** 통합 브랜치의 추적 참조가 낡으면 `merged` 판정도 낡는다. 그래서
-저장소마다 통합 브랜치 각각을 별도의 fetch 작업으로 두되, 현재 브랜치가 곧 통합 브랜치면 한 번만
-가져간다. 스로틀은 다른 fetch와 같은 규칙을 따른다.
+**Integration branches are fetched too.** Stale tracking refs would make `merged` stale. Each integration
+branch gets its own fetch job per repository, deduplicated when the current branch already uses that
+ref. The same throttling rules apply.
 
-## 명령
+## Commands
 
 ```sh
-herdr plugin action invoke worktrees --plugin git-upstream # worktree 화면을 팝업 pane 으로 연다
-herdr plugin action invoke refresh   --plugin git-upstream # 스로틀을 무시하고 지금 갱신
-herdr plugin action invoke start     --plugin git-upstream # 데몬 시작
-herdr plugin action invoke stop      --plugin git-upstream # 데몬 중지
+herdr plugin action invoke worktrees --plugin git-upstream # Open the worktree screen in a popup pane
+herdr plugin action invoke refresh   --plugin git-upstream # Refresh now, ignoring the throttle
+herdr plugin action invoke start     --plugin git-upstream # Start the daemon
+herdr plugin action invoke stop      --plugin git-upstream # Stop the daemon
 ```
 
-실행 파일을 직접 부를 수도 있다.
+You can also invoke the executable directly:
 
 ```sh
-./bin/herdr-git-upstream setup                 # config.toml 에 붙여 넣을 설정을 출력 (파일은 고치지 않는다)
-./bin/herdr-git-upstream status                # 데몬과 설정 상태를 JSON 으로 출력
+./bin/herdr-git-upstream setup                 # Print settings to paste into config.toml; does not edit files
+./bin/herdr-git-upstream status                # Print daemon and configuration status as JSON
 ./bin/herdr-git-upstream refresh
-./bin/herdr-git-upstream worktrees             # worktree 화면을 지금 페인에 그린다 (--cwd <path> 로 저장소를 고른다)
-./bin/herdr-git-upstream open-worktrees        # worktree 화면을 herdr 팝업 pane 으로 연다 (액션이 부르는 명령)
-./bin/herdr-git-upstream new-worktree          # 기준 브랜치를 고르는 생성 팝업 (--cwd <path> 가능)
-./bin/herdr-git-upstream open-new-worktree     # 생성 팝업을 herdr pane 으로 연다
+./bin/herdr-git-upstream worktrees             # Draw in the current pane; --cwd <path> selects a repository
+./bin/herdr-git-upstream open-worktrees        # Open a herdr popup pane; called by the action
+./bin/herdr-git-upstream new-worktree          # Open the base-selection popup; accepts --cwd <path>
+./bin/herdr-git-upstream open-new-worktree     # Open the creation popup in a herdr pane
 ```
 
-`worktrees`와 `new-worktree`는 표준 입출력이 터미널이어야 한다. 파이프 뒤에서는 종료 코드 2로 끝난다.
+`worktrees` and `new-worktree` require terminal standard input and output. They exit with code 2 when piped.
 
-## 문제를 살펴볼 때
+## Troubleshooting
 
-`status`가 알려 주는 로그 파일을 먼저 본다.
+Start with the log file reported by `status`:
 
 ```sh
 ./bin/herdr-git-upstream status
 tail -f "$(./bin/herdr-git-upstream status | sed -n 's/.*"log_path": "\(.*\)".*/\1/p')"
 ```
 
-상세 로그가 필요하면 `HERDR_GIT_UPSTREAM_DEBUG=1`을 준 채로 데몬을 다시 띄운다. `merged`가 붙은
-이유(조상 검사인지, 어느 통합 브랜치와의 merge-tree 비교인지)도 이 수준에서 보인다.
+For detailed logging, restart the daemon with `HERDR_GIT_UPSTREAM_DEBUG=1`. This level also reports why
+`merged` was assigned: an ancestry check or a merge-tree comparison with a particular integration branch.
 
-`catchup`이 한 번도 뜨지 않으면 `status`의 `git_version`과 `merge_tree_supported`를 본다.
-git 2.38 미만에서는 이 토큰이 쉰다.
+If `catchup` never appears, inspect `git_version` and `merge_tree_supported` in `status`. The token is
+disabled below Git 2.38.
 
-아무것도 보이지 않는다면 대개 둘 중 하나다. 사이드바 `rows`에 토큰을 넣지 않았거나,
-사이드바를 접어 두었거나(접힌 상태에서는 herdr가 번호와 상태 점만 그린다). 앞의 경우는 `status`의
-`sidebar_configured`가 false로 나오며, `setup`이 붙여 넣을 것을 만들어 준다.
+If nothing appears, usually the sidebar `rows` do not contain the tokens, or the sidebar is collapsed.
+When collapsed, herdr renders only workspace numbers and state dots. Missing configuration appears as
+`sidebar_configured: false` in `status`; `setup` prints the entries to paste.
 
-## 알아둘 점
+## Limitations and notes
 
-- 평소에는 fetch만 한다. 작업 트리를 건드리는 것은 갓 만든 worktree를 앞당길 때 한 번뿐이며,
-  그것도 빨리 감기라 잃을 것이 없다. `fresh_worktrees`를 false로 두면 그마저 하지 않는다.
-- fetch와 토큰 보고는 git 2.5 이상이면 된다. 오래된 배포판의 git에서도 동작하도록, 최근에 생긴
-  옵션은 쓰지 않는다. `merged`의 조상 검사(`for-each-ref --contains`)는 2.7, merge-tree 비교와
-  `catchup`은 2.38 이상에서만 돌고 그 아래에서는 조용히 쉰다.
-- `merge-tree --write-tree`는 결과 트리 객체를 객체 저장소에 남긴다. 다만 같은 두 커밋을 다시
-  병합하면 같은 트리가 나와 새로 쓰이지 않고, `catchup`은 (HEAD, 추적 참조 커밋) 쌍이 같으면 아예
-  부르지 않으므로 반복 실행으로 저장소가 자라지는 않는다. 남는 객체는 어디에서도 참조되지 않아
-  `git gc`가 알아서 거둔다. 자동 정리(`gc.auto`)는 이 명령에서도 꺼 둔다.
-- 사이드바에 아무것도 뜨지 않으면 `status`의 `invalid_token_names`부터 본다. herdr는 한 요청의
-  토큰 이름을 통째로 검사하므로, 이름 하나가 규칙(`[A-Za-z0-9_-]`, 32자 이하)에 어긋나면
-  그 요청 전체가 거절된다. 이 플러그인은 어긋난 이름을 미리 걸러 내고 거기에 적어 둔다.
-- 사용자가 페인을 맞바꾼 워크스페이스에서는 herdr가 뿌리 페인을 새로 지정하지 않으므로,
-  worktree가 아닌 워크스페이스에 한해 사이드바의 브랜치와 다른 저장소를 셀 수 있다.
-  worktree 워크스페이스는 herdr가 기억해 둔 체크아웃 경로를 쓰므로 이 문제가 없다.
-- `herdr machine`으로 연결한 원격 호스트의 저장소는 그쪽 서버에서 따로 돌려야 한다.
-- `git maintenance`의 자동 prefetch는 대안이 되지 못한다. `refs/prefetch/*`만 갱신하고
-  `refs/remotes/*`는 그대로 두어서 herdr가 보는 값이 변하지 않는다.
+- Periodic remote updates only fetch. A newly created worktree may also be fast-forwarded when its
+  checks pass; setting `fresh_worktrees` to false disables that automatic freshening. Separately,
+  explicit actions in the creation popup or worktree screen create or remove worktrees. Removal is
+  never forced, and branches are kept.
+- Git 2.31 or later is required. Fetching uses `--no-write-fetch-head`, introduced in
+  [Git 2.29](https://github.com/git/git/blob/v2.29.0/Documentation/RelNotes/2.29.0.txt#L43-L44), while the
+  worktree screen reads `locked` and `prunable` fields added to porcelain output in
+  [Git 2.31](https://github.com/git/git/blob/v2.31.0/Documentation/RelNotes/2.31.0.txt#L56-L58).
+  Merge-tree comparisons and `catchup` require Git 2.38 or later. On earlier supported versions,
+  `merged` uses ancestry alone and `catchup` is omitted. Runtime tests used Git 2.55.0; Git 2.31 itself
+  has not been tested.
+- `merge-tree --write-tree` leaves result tree objects in the object store. Repeating a merge of the same
+  two commits produces the same tree rather than another object. `catchup` skips the command entirely
+  while the HEAD and tracking-ref commit pair stays the same. Repeating those checks therefore does not
+  keep growing the repository. Unreferenced objects can be collected by `git gc`; automatic cleanup
+  (`gc.auto`) is disabled for this command too.
+- If sidebar tokens are missing, check `invalid_token_names` in `status`. herdr validates all token names
+  in a request together: one invalid name rejects the whole request. Names may contain `[A-Za-z0-9_-]`
+  and must be at most 32 characters. The plugin filters invalid names beforehand and lists them there.
+- In workspaces where panes have been swapped, herdr does not reassign the root pane. A non-worktree
+  workspace can therefore be counted against a different repository from the one its sidebar branch
+  represents. Worktree workspaces use the checkout path remembered by herdr and avoid this problem.
+- Repositories on a remote host connected through `herdr machine` need the plugin running on that host's
+  server separately.
+- Automatic prefetch from `git maintenance` is not a substitute: it updates `refs/prefetch/*`, leaving
+  the `refs/remotes/*` values used by herdr unchanged.
 
-## 감사
+## Acknowledgments
 
-[mariotmc/herdr-source-control](https://github.com/mariotmc/herdr-source-control)이 herdr가 fetch를
-하지 않는다는 문제와 스로틀을 둔 갱신이라는 해법을 먼저 보여 주었다. 이 플러그인은 그 아이디어를
-가져오되 세 가지를 달리했다. 세 플랫폼을 모두 지원하고, 포커스된 저장소만이 아니라 열려 있는 모든
-워크스페이스를 주기적으로 돌며, 내장 토큰이 지워지는 worktree 행에서도 보이도록 값을 직접 보고한다.
+[mariotmc/herdr-source-control](https://github.com/mariotmc/herdr-source-control) first demonstrated the
+missing-fetch problem and a throttled refresh solution. This plugin builds on that idea with three
+differences: it targets all three platforms, periodically visits every open workspace rather than only
+the focused repository, and reports its own values so worktree rows remain informative even where
+herdr removes the built-in tokens.
 
-## 문서
+## Documentation
 
-- [docs/PLAN.md](docs/PLAN.md) — 무엇을 왜 만드는지, 어떤 순서로 갈지
-- [docs/HERDR.md](docs/HERDR.md) — 설계의 근거가 되는 herdr 동작들. 전부 소스에서 확인했고 출처를 적어 두었다
+- [docs/PLAN.md](docs/PLAN.md) — what is being built, why, and in what order
+- [docs/HERDR.md](docs/HERDR.md) — herdr behavior behind the design, checked against source with references
 
-## 라이선스
+## License
 
 MIT
