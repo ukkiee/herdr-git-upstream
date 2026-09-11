@@ -50,8 +50,11 @@ worktree 삭제는 경계에 걸쳐 있다. herdr-shear가 이미 잘하지만 �
 | 영문·한국어 README, 0.2.0 문서 정리 | 완료 |
 | 전체 교차 기능 검토 | 완료. [검토 기록](reviews/0.2.0-verification.md) |
 | herdr 연결 실측 | 연결·팝업·임시 저장소 생성/삭제·설정 적용 확인. 사용자가 mfe 사이드바 토큰 표시 확인 |
+| 팝업의 호출 저장소 선택 | 완료 (`28f7c92`). 사용자가 실제 `mfe · 27 worktrees` 확인 |
+| 첫 목록 표시 속도 | 완료 (`765b6f1`). 최초 inventory 표시와 배경 판정, 선택 경로 보존 |
+| mfe 통합 기준 설정 | 추가 전후 로컬 판정 비교 완료. 적용은 사용자 결정 |
 
-2026-09-10 현재 전체 13개 패키지의 race 시험, vet, 여섯 플랫폼(linux/darwin/windows × amd64/arm64)
+2026-09-10~11 전체 13개 패키지의 race 시험, vet, 여섯 플랫폼(linux/darwin/windows × amd64/arm64)
 교차 컴파일과 매니페스트 TOML 검사를 통과했다. herdr 0.9.0에 0.2.0을 연결해 실행했다.
 Windows 실행은 미실측이다. 후속 요청으로 사용자 config.toml에 검증한 설정을 추가했고 사용자가
 reload를 실행해 적용했다. 자세한 범위는 검토 기록에 남긴다.
@@ -92,7 +95,7 @@ internal/worktreeui/      worktree 화면과 생성 팝업
 - 플러그인이 실행 중에 pane 을 여는 통로는 `herdr plugin pane open --plugin <id> --entrypoint <pane-id>
   [--placement overlay|split|tab|zoomed] [--focus]` 다. CLI 의 `--placement` 목록에는 `popup` 이 없고,
   매니페스트 `[[panes]]` 의 `placement` 에는 `popup` 과 `width`/`height` 가 있다.
-  `--placement` 를 비웠을 때 매니페스트 값을 따르는지는 붙여 본 뒤에 안다.
+  `--placement` 를 비우면 매니페스트의 popup을 따른다. 실제 연결과 사용자 화면으로 확인했다.
 - herdr 기본 키에 `rename_workspace = "prefix+shift+w"` 가 있다. `prefix+shift+u` 는 비어 있다.
 - herdr 는 `[worktrees] directory` (기본 `~/.herdr/worktrees`) 로 worktree 뿌리를 바꿀 수 있다.
 - 실제 저장소(mfe) 의 worktree 27개 가운데 22개가 git 자체 판정으로 upstream `[gone]` 이다.
