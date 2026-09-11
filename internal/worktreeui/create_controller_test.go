@@ -86,7 +86,7 @@ func TestCreateCandidatesUseInvokingCheckoutAndCanonicalRefs(t *testing.T) {
 	for _, candidate := range c.m.Candidates {
 		refs = append(refs, candidate.Ref)
 	}
-	if !slices.Equal(refs, []string{"refs/heads/widget-studio/dev", "refs/remotes/origin/main", "refs/remotes/origin/missing"}) {
+	if !slices.Equal(refs, []string{"refs/heads/widget-studio/dev", "refs/remotes/origin/main", "refs/remotes/origin/missing", "refs/heads/main", "refs/heads/origin/main"}) {
 		t.Fatalf("candidates order/dedup: %v", refs)
 	}
 	if c.m.Candidates[1].Kind != CandidateUpstream || c.m.Candidates[2].Kind != CandidateMergeTarget || c.m.Candidates[2].Status != "not fetched" {
@@ -104,6 +104,99 @@ func TestCreateCandidatesUseInvokingCheckoutAndCanonicalRefs(t *testing.T) {
 	}
 	if len(c.m.Candidates) < 2 || c.m.Candidates[0].Ref != "refs/heads/origin/main" || c.m.Candidates[1].Ref != "refs/remotes/origin/main" {
 		t.Fatalf("same short name: %+v", c.m.Candidates)
+	}
+}
+
+func TestCreateCandidatesIncludeRepositoryBranches(t *testing.T) {
+	f := newFixture(t)
+	run(t, f.work, "git", "branch", "feature/local")
+	run(t, f.work, "git", "update-ref", "refs/remotes/origin/release", "HEAD")
+	c, err := newCreateController(context.Background(), Options{CWD: f.work, Herdr: newCreateFake(t, f), Git: f.git, Store: f.store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refs []string
+	for _, candidate := range c.m.Candidates {
+		refs = append(refs, candidate.Ref)
+	}
+	want := []string{"refs/heads/main", "refs/remotes/origin/main", "refs/heads/feature/local", "refs/remotes/origin/release"}
+	if !slices.Equal(refs, want) {
+		t.Fatalf("dropdown must include local and remote branches after preferred bases, without HEAD aliases: got %v, want %v", refs, want)
+	}
+	m := c.m
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyTab})
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyEnter})
+	for range len(want) - 1 {
+		m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyDown})
+	}
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyEnter})
+	if base, _ := m.base(); base.Ref != "refs/remotes/origin/release" || m.Name != "release-2" {
+		t.Fatalf("last remote branch cannot be selected: %+v", m)
+	}
+}
+
+func TestCreateAdditionalRemoteFetchesWhenSelected(t *testing.T) {
+	f := newFixture(t)
+	run(t, f.work, "git", "update-ref", "refs/remotes/origin/release", "HEAD")
+	run(t, f.seed, "git", "switch", "--quiet", "-c", "release")
+	f.commitIn(t, f.seed, "release.txt", "new release")
+	f.pushed(t, f.seed, "release")
+	c, err := newCreateController(context.Background(), Options{CWD: f.work, Herdr: newCreateFake(t, f), Git: f.git, Store: f.store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.m.Name, c.m.UserEdited = "chosen", true
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	keys := make(chan tui.Key, 8)
+	models := make(chan CreateModel, 32)
+	done := make(chan createOutcome, 1)
+	c.afterDraw = func(m CreateModel) { models <- m }
+	go func() {
+		done <- c.loop(ctx, keys, &syncBuffer{}, func() (int, int) { return 62, 16 }, func(fn func()) { go fn() })
+	}()
+	waitModel := func(ok func(CreateModel) bool) CreateModel {
+		t.Helper()
+		for {
+			select {
+			case m := <-models:
+				if ok(m) {
+					return m
+				}
+			case <-ctx.Done():
+				t.Fatal("popup did not reach expected state")
+			}
+		}
+	}
+	first := waitModel(func(m CreateModel) bool { return m.Candidates[1].Status == "up to date" })
+	if first.Candidates[2].Status != "not fetched" {
+		t.Fatalf("unselected extra remote was fetched: %+v", first.Candidates[2])
+	}
+	for _, kind := range []tui.KeyKind{tui.KeyTab, tui.KeyEnter, tui.KeyDown, tui.KeyDown, tui.KeyEnter, tui.KeyTab} {
+		keys <- tui.Key{Kind: kind}
+	}
+	waitModel(func(m CreateModel) bool {
+		return m.Selected == 2 && m.Focus == FocusName && m.Candidates[2].Status == "up to date"
+	})
+	keys <- tui.Key{Kind: tui.KeyEnter}
+	select {
+	case result := <-done:
+		if result.err != nil || len(result.warnings) != 0 {
+			t.Fatalf("create: %+v", result)
+		}
+	case <-ctx.Done():
+		t.Fatal("creation did not finish")
+	}
+	path := filepath.Join(f.base, "created", "chosen")
+	if data, err := os.ReadFile(filepath.Join(path, "release.txt")); err != nil || string(data) != "new release" {
+		t.Fatalf("creation did not use the fetched extra branch: %q %v", data, err)
+	}
+	repo, err := f.git.Discover(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.git.Upstream(context.Background(), repo); !errors.Is(err, gitrepo.ErrNoUpstream) {
+		t.Fatalf("new remote-based branch kept upstream: %v", err)
 	}
 }
 
@@ -470,7 +563,7 @@ func TestCreateKeepsTypingAndCancelResponsiveDuringFetch(t *testing.T) {
 	keys <- key('x')
 	select {
 	case m := <-models:
-		if m.Name != "x" {
+		if m.Name != "main-2x" {
 			t.Fatalf("typing during fetch: %q", m.Name)
 		}
 	case <-time.After(time.Second):

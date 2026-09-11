@@ -81,6 +81,8 @@ const (
 	CandidateUpstream
 	CandidateDefault
 	CandidateMergeTarget
+	CandidateLocal
+	CandidateRemote
 )
 
 func (k CandidateKind) String() string {
@@ -91,8 +93,12 @@ func (k CandidateKind) String() string {
 		return "upstream"
 	case CandidateDefault:
 		return "default"
-	default:
+	case CandidateMergeTarget:
 		return "merge target"
+	case CandidateLocal:
+		return "local"
+	default:
+		return "remote"
 	}
 }
 
@@ -128,15 +134,14 @@ const (
 )
 
 type CreateModel struct {
-	RepoName     string
-	Name         string
-	NameSelected bool
-	UserEdited   bool
-	PathRoot     string
-	Candidates   []Candidate
-	Selected     int
-	MenuOpen     bool
-	MenuIndex    int
+	RepoName   string
+	Name       string
+	UserEdited bool
+	PathRoot   string
+	Candidates []Candidate
+	Selected   int
+	MenuOpen   bool
+	MenuIndex  int
 	// MenuRef keeps the highlight on the same candidate when async lookup inserts a row.
 	MenuRef string
 	Focus   FocusArea
@@ -175,7 +180,6 @@ func (m CreateModel) autoName() CreateModel {
 	}
 	if base, ok := m.base(); ok {
 		m.Name = AutoName(base.nameRef(), func(name string) bool { return m.Taken[name] })
-		m.NameSelected = true
 	}
 	return m
 }
@@ -240,21 +244,16 @@ func UpdateCreate(m CreateModel, k tui.Key) (CreateModel, CreateAction) {
 		return m, CreateSubmit
 	case tui.KeyBackspace:
 		if m.Focus == FocusName {
-			if m.NameSelected {
-				m.Name = ""
-			} else if m.Name != "" {
+			if m.Name != "" {
 				_, size := utf8.DecodeLastRuneInString(m.Name)
 				m.Name = m.Name[:len(m.Name)-size]
 			}
-			m.NameSelected, m.UserEdited = false, true
+			m.UserEdited = true
 		}
 	case tui.KeyRune:
 		if m.Focus == FocusName && unicode.IsPrint(k.Rune) {
-			if m.NameSelected {
-				m.Name = ""
-			}
 			m.Name += string(k.Rune)
-			m.NameSelected, m.UserEdited = false, true
+			m.UserEdited = true
 		}
 	case tui.KeyUp, tui.KeyDown:
 		if m.Focus == FocusBase && m.MenuOpen && len(m.Candidates) > 0 {
@@ -296,11 +295,14 @@ func RenderCreate(m CreateModel, cols, rows int) []string {
 	width := min(cols, 64)
 	inside := width - 2
 	name := m.Name
-	if name == "" {
-		name = " "
+	// Keep the end of a long name and its cursor inside the field.
+	nameWidth := max(0, inside-12)
+	for tui.Width(name) > nameWidth && name != "" {
+		_, size := utf8.DecodeRuneInString(name)
+		name = name[size:]
 	}
-	if m.Focus == FocusName && m.NameSelected {
-		name = tui.Reverse(name)
+	if m.Focus == FocusName && !m.Busy {
+		name += tui.Reverse(" ")
 	}
 	base, available := m.base()
 	label, detail := "no base branch available", ""
@@ -326,7 +328,8 @@ func RenderCreate(m CreateModel, cols, rows int) []string {
 		offset := max(0, index-visible+1)
 		menuWidth := max(0, inside-11)
 		indent := strings.Repeat(" ", 9)
-		content = append(content, indent+"┌"+strings.Repeat("─", menuWidth)+"┐")
+		position := tui.Truncate(" "+strconv.Itoa(index+1)+"/"+strconv.Itoa(len(m.Candidates))+" ", menuWidth)
+		content = append(content, indent+"┌"+position+strings.Repeat("─", max(0, menuWidth-tui.Width(position)))+"┐")
 		for i := offset; i < len(m.Candidates) && i < offset+visible; i++ {
 			candidate := m.Candidates[i]
 			marker := "  "

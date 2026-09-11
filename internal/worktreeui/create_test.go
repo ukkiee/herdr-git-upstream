@@ -54,7 +54,7 @@ func TestCreateNamingAndPath(t *testing.T) {
 }
 
 func createSample() CreateModel {
-	return CreateModel{RepoName: "mfe", Name: "widget-studio/dev-2", NameSelected: true, PathRoot: "/worktrees", Taken: map[string]bool{"widget-studio/dev": true, "main": true}, Candidates: []Candidate{
+	return CreateModel{RepoName: "mfe", Name: "widget-studio/dev-2", PathRoot: "/worktrees", Taken: map[string]bool{"widget-studio/dev": true, "main": true}, Candidates: []Candidate{
 		{Label: "widget-studio/dev", Ref: "refs/heads/widget-studio/dev", Kind: CandidateCurrent, Status: "↓3 behind"},
 		{Label: "team/upstream/main", Ref: "refs/remotes/team/upstream/main", Kind: CandidateUpstream, Fetch: gitrepo.Upstream{Remote: "team/upstream", RemoteRef: "refs/heads/main", TrackingRef: "refs/remotes/team/upstream/main"}, Status: "fetching…"},
 	}}
@@ -70,10 +70,10 @@ func TestUpdateCreate(t *testing.T) {
 		focus    FocusArea
 		action   CreateAction
 	}{
-		{"typing replaces selection", []tui.Key{key('x')}, "x", true, 0, FocusName, CreateNone},
-		{"backspace removes selection", []tui.Key{{Kind: tui.KeyBackspace}}, "", true, 0, FocusName, CreateNone},
+		{"typing appends to name", []tui.Key{key('x')}, "widget-studio/dev-2x", true, 0, FocusName, CreateNone},
+		{"backspace removes last character", []tui.Key{{Kind: tui.KeyBackspace}}, "widget-studio/dev-", true, 0, FocusName, CreateNone},
 		{"base changes automatic name", []tui.Key{{Kind: tui.KeyTab}, {Kind: tui.KeyEnter}, {Kind: tui.KeyDown}, {Kind: tui.KeyEnter}}, "main-2", false, 1, FocusBase, CreateNone},
-		{"edited name stays", []tui.Key{key('x'), {Kind: tui.KeyTab}, {Kind: tui.KeyEnter}, {Kind: tui.KeyDown}, {Kind: tui.KeyEnter}}, "x", true, 1, FocusBase, CreateNone},
+		{"edited name stays", []tui.Key{key('x'), {Kind: tui.KeyTab}, {Kind: tui.KeyEnter}, {Kind: tui.KeyDown}, {Kind: tui.KeyEnter}}, "widget-studio/dev-2x", true, 1, FocusBase, CreateNone},
 		{"tab back", []tui.Key{{Kind: tui.KeyTab}, {Kind: tui.KeyTab}}, "widget-studio/dev-2", false, 0, FocusName, CreateNone},
 		{"submit", []tui.Key{{Kind: tui.KeyEnter}}, "widget-studio/dev-2", false, 0, FocusName, CreateSubmit},
 		{"cancel", []tui.Key{{Kind: tui.KeyEsc}}, "widget-studio/dev-2", false, 0, FocusName, CreateCancel},
@@ -96,7 +96,6 @@ func TestUpdateCreate(t *testing.T) {
 	}
 	m = createSample()
 	m.Name = "가나"
-	m.NameSelected = false
 	if got, _ := UpdateCreate(m, tui.Key{Kind: tui.KeyBackspace}); got.Name != "가" {
 		t.Fatalf("UTF-8 backspace: %q", got.Name)
 	}
@@ -217,8 +216,8 @@ func TestRenderCreate(t *testing.T) {
 	if strings.Contains(plain(all), "team/upstream/main") {
 		t.Fatal("collapsed Base must not show other candidates")
 	}
-	if !strings.Contains(all, tui.Reverse(m.Name)) {
-		t.Fatal("selected name must be reversed")
+	if !strings.Contains(all, m.Name+tui.Reverse(" ")) || strings.Contains(all, tui.Reverse(m.Name)) {
+		t.Fatal("only the cursor after the name must be reversed")
 	}
 	for _, line := range lines {
 		if tui.Width(line) > 80 {
@@ -261,7 +260,7 @@ func TestRenderCreateDropdownAndViewport(t *testing.T) {
 		}
 	}
 	open := plain(strings.Join(RenderCreate(m, 62, 16), "\n"))
-	for _, want := range []string{"Enter select", "Esc close", "▴", "▸", "fetching…"} {
+	for _, want := range []string{"Enter select", "Esc close", "▴", "▸", "fetching…", "14/14"} {
 		if !strings.Contains(open, want) {
 			t.Fatalf("missing %q: %s", want, open)
 		}
@@ -271,5 +270,22 @@ func TestRenderCreateDropdownAndViewport(t *testing.T) {
 	}
 	if narrow := plain(strings.Join(RenderCreate(m, 32, 12), "\n")); !strings.Contains(narrow, "feature/") {
 		t.Fatalf("narrow dropdown must retain candidate identity: %s", narrow)
+	}
+}
+
+func TestRenderCreateKeepsEndCursorVisible(t *testing.T) {
+	m := createSample()
+	m.Name = strings.Repeat("긴이름/", 20) + "tail-2"
+	for _, cols := range []int{32, 62, 64} {
+		lines := RenderCreate(m, cols, 16)
+		all := strings.Join(lines, "\n")
+		if !strings.Contains(all, "tail-2"+tui.Reverse(" ")+"]") {
+			t.Fatalf("end cursor is not visible at %d columns: %s", cols, all)
+		}
+		for _, line := range lines {
+			if tui.Width(line) > cols {
+				t.Fatalf("name overflows %d columns: %s", cols, line)
+			}
+		}
 	}
 }

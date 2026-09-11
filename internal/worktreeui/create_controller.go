@@ -183,6 +183,22 @@ func (c *createController) candidates(ctx context.Context) ([]Candidate, string,
 			lookup = remote
 		}
 	}
+	refs, err := c.git.BranchRefs(ctx, c.repo)
+	if err != nil {
+		return nil, "", err
+	}
+	for _, ref := range refs {
+		if name, ok := strings.CutPrefix(ref, "refs/heads/"); ok {
+			add(Candidate{Label: name, Ref: ref, Kind: CandidateLocal, Status: "up to date"})
+		}
+	}
+	branches, err := c.git.RemoteBranches(ctx, c.repo)
+	if err != nil {
+		return nil, "", err
+	}
+	for _, up := range branches {
+		add(Candidate{Label: strings.TrimPrefix(up.TrackingRef, "refs/remotes/"), Ref: up.TrackingRef, Kind: CandidateRemote, Fetch: up, Status: "not fetched"})
+	}
 	return candidates, lookup, nil
 }
 
@@ -358,7 +374,7 @@ func (c *createController) loop(ctx context.Context, keys <-chan tui.Key, out io
 	startFetch := func() {
 		c.m.Candidates = append([]Candidate(nil), c.m.Candidates...)
 		for i, candidate := range c.m.Candidates {
-			if candidate.Kind == CandidateCurrent || fetching[candidate.Ref] {
+			if candidate.Fetch.Remote == "" || fetching[candidate.Ref] || (candidate.Kind == CandidateRemote && i != c.m.Selected) {
 				continue
 			}
 			fetching[candidate.Ref] = true
@@ -463,7 +479,11 @@ func (c *createController) loop(ctx context.Context, keys <-chan tui.Key, out io
 				return createOutcome{}
 			}
 			var action CreateAction
+			previousBase, _ := c.m.base()
 			c.m, action = UpdateCreate(c.m, k)
+			if base, ok := c.m.base(); ok && base.Ref != previousBase.Ref {
+				startFetch()
+			}
 			switch action {
 			case CreateCancel:
 				return createOutcome{}

@@ -1,6 +1,58 @@
 package gitrepo
 
-import "context"
+import (
+	"context"
+	"sort"
+	"strings"
+)
+
+// RemoteBranches lists known remote branch refs with their fetch source. Read each
+// remote's refspecs once so a large dropdown does not spawn commands per branch.
+// Symbolic aliases and refs mapped from tags or pull requests are not branches.
+func (r Runner) RemoteBranches(ctx context.Context, repo Repo) ([]Upstream, error) {
+	out, err := r.git(ctx, repo.Root, localTimeout, "for-each-ref", "--format=%(refname)%00%(symref)", "refs/remotes/")
+	if err != nil {
+		return nil, err
+	}
+	remotes, err := r.Remotes(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(remotes, func(i, j int) bool { return len(remotes[i]) > len(remotes[j]) })
+	specs := make(map[string][]refspec, len(remotes))
+	var allSpecs []refspec
+	for _, remote := range remotes {
+		specs[remote] = r.fetchRefspecs(ctx, repo, remote)
+		allSpecs = append(allSpecs, specs[remote]...)
+	}
+	resolve := func(ref string) Upstream {
+		// The fetch destination can use a namespace unrelated to the remote name.
+		for _, remote := range remotes {
+			for _, spec := range specs[remote] {
+				if source, ok := substituteRefspec(spec.destination, spec.source, ref); ok {
+					return Upstream{Remote: remote, RemoteRef: source, TrackingRef: ref}
+				}
+			}
+		}
+		for _, remote := range remotes {
+			if name, ok := strings.CutPrefix(ref, "refs/remotes/"+remote+"/"); ok && name != "HEAD" {
+				return Upstream{Remote: remote, RemoteRef: "refs/heads/" + name, TrackingRef: ref}
+			}
+		}
+		return Upstream{}
+	}
+	var branches []Upstream
+	for _, line := range splitLines(out) {
+		ref, symref, _ := strings.Cut(line, "\x00")
+		if symref != "" || isNonBranchTrackingRef(allSpecs, ref) {
+			continue
+		}
+		if up := resolve(ref); up.Remote != "" && strings.HasPrefix(up.RemoteRef, "refs/heads/") {
+			branches = append(branches, up)
+		}
+	}
+	return branches, nil
+}
 
 // BranchRefs는 로컬 브랜치와 원격 추적 참조의 전체 이름을 돌려준다. 짧은 이름은 로컬 origin/main 과
 // 원격 origin/main 을 구분하지 못하므로 자동 이름의 빈자리 검사에서는 전체 이름을 사용한다.

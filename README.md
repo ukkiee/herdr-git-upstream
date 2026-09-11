@@ -275,8 +275,10 @@ panes have not been tested at runtime.
 
 `herdr-git-upstream new-worktree [--cwd <path>]` opens a screen for choosing a new worktree's base branch.
 herdr's built-in popup starts from the current HEAD. This popup lists the current branch, its upstream,
-the remote default branch, and the repository's configured integration branches, in that order.
-Each distinct ref appears once. `Base` starts collapsed: press `Tab` to focus it, then `Enter` to
+the remote default branch, and the repository's configured integration branches first, followed by
+all local branches and known remote-tracking branches in name order. Each distinct ref appears once;
+remote HEAD aliases and pull-request/tag refs are excluded. The menu shows your position and total count.
+`Base` starts collapsed: press `Tab` to focus it, then `Enter` to
 open the dropdown. Use `↑`/`↓` and `Enter` to confirm a base. Return to the branch-name field with `Tab`
 and press `Enter` to create. Browsing the dropdown does not change the confirmed base or suggested name.
 
@@ -300,7 +302,8 @@ edit your configuration or key bindings for you.
 
 The suggested name comes from the base branch and avoids names already used by local branches,
 remote-tracking branches, or worktrees. If occupied, it tries `-2`, `-3`, and so on. The next suggestion
-after `feature-2` is `feature-3`. The entire suggested name starts selected, so typing replaces it.
+after `feature-2` is `feature-3`. The cursor starts at the end: typing appends and `Backspace` removes
+the last character. Long names scroll to keep the end and cursor visible.
 Once you edit the name, changing the base no longer overwrites your input.
 
 | Key | Action |
@@ -312,7 +315,9 @@ Once you edit the name, changing the base no longer overwrites your input.
 | `Esc` | Close the dropdown first; when closed, cancel the popup |
 | `Ctrl-C` | Cancel the popup |
 
-Remote candidates are fetched individually after the popup opens. You can edit the name and choose a
+Recommended remote candidates are fetched individually after the popup opens. Other remote branches
+are fetched when confirmed as the base, so opening a large list does not fetch every branch.
+You can edit the name and choose a
 base while waiting. Creation waits for the selected remote candidate to finish fetching. If its fetch
 fails, reopen the popup to retry. The path preview combines `[worktrees] directory`, the repository
 name, and herdr's branch slug rules. The command does not pass `--path`; herdr chooses the actual path.
@@ -321,7 +326,7 @@ When creating a **new branch** from a remote-tracking ref, the plugin unsets the
 upstream. Otherwise, `git pull` and the sidebar counts would keep following the base branch, such as
 main, instead of the feature branch. Set an upstream on the first push to restore those tokens.
 If you manually enter an existing branch name, herdr opens that branch and the plugin preserves its
-upstream. The automatic freshening hook does not move an explicitly selected remote base or an existing
+upstream. The automatic freshening hook does not move an explicitly selected base other than the current branch, or an existing
 branch. If a completed creation's name is later reused for a new branch based on the current branch,
 the normal automatic freshening flow applies.
 
