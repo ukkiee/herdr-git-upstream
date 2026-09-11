@@ -398,6 +398,11 @@ func (c *createController) loop(ctx context.Context, keys <-chan tui.Key, out io
 	}
 	draw := func() {
 		cols, rows := size()
+		c.m.Cols, c.m.Rows = cols, rows
+		if c.m.MessageOpen {
+			wrapped := wrapCreateMessage(c.m.Message, max(1, min(cols, 64)-4))
+			c.m.MessageOffset = max(0, min(c.m.MessageOffset, len(wrapped)-max(1, rows-4)))
+		}
 		tui.Frame(out, RenderCreate(c.m, cols, rows), cols, rows)
 		if c.afterDraw != nil {
 			c.afterDraw(c.m)
