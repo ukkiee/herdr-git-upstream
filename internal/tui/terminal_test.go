@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -53,6 +55,79 @@ func TestCloseRestoresBeforeWriting(t *testing.T) {
 	// 다시 불러도 되돌리지 않고 처음의 결과를 돌려준다.
 	if err := term.Close(); err != closeErr || restored != 1 {
 		t.Fatalf("두 번째 Close 는 아무것도 하지 않아야 한다: %v, 되돌린 횟수 %d", err, restored)
+	}
+}
+
+// 윈도우는 출력 복원 때 VT 처리가 꺼질 수 있다. 출력 복원 함수 안에서 파일을 읽어 커서 표시와 대체 화면
+// 해제가 이미 쓰였는지 확인한다. 쓰기 또는 입력 복원이 실패해도 출력 복원은 빠지지 않아야 한다.
+func TestCloseRestoresOutputAfterWriting(t *testing.T) {
+	inputErr := errors.New("input restore failed")
+	outputErr := errors.New("output restore failed")
+	cases := []struct {
+		name        string
+		closed      bool
+		restoreErr  error
+		outputError error
+	}{
+		{"정상", false, nil, nil},
+		{"쓰기 실패", true, nil, nil},
+		{"입력과 출력 복원 실패", false, inputErr, outputErr},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := os.CreateTemp(t.TempDir(), "terminal")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer out.Close()
+			if tc.closed {
+				if err := out.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var calls []string
+			term := &Terminal{
+				out: out,
+				restore: func() error {
+					calls = append(calls, "input")
+					return tc.restoreErr
+				},
+				restoreOutput: func() error {
+					calls = append(calls, "output")
+					written, err := os.ReadFile(out.Name())
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := "\x1b[0m\x1b[?25h\x1b[?1049l"
+					if tc.closed {
+						want = ""
+					}
+					if string(written) != want {
+						t.Errorf("출력 모드를 복원할 때 종료 시퀀스가 이미 쓰여 있어야 한다: %q, 기대값 %q", written, want)
+					}
+					return tc.outputError
+				},
+				done: make(chan struct{}),
+			}
+			closeErr := term.Close()
+			if !reflect.DeepEqual(calls, []string{"input", "output"}) {
+				t.Fatalf("복원 순서 %v, 기대값 input, output", calls)
+			}
+			if tc.closed && !errors.Is(closeErr, os.ErrClosed) {
+				t.Errorf("쓰기 실패가 보존되어야 한다: %v", closeErr)
+			}
+			for _, want := range []error{tc.restoreErr, tc.outputError} {
+				if want != nil && !errors.Is(closeErr, want) {
+					t.Errorf("복원 실패 %v 가 보존되어야 한다: %v", want, closeErr)
+				}
+			}
+			if !tc.closed && tc.restoreErr == nil && tc.outputError == nil && closeErr != nil {
+				t.Fatalf("정상 종료에 오류가 없어야 한다: %v", closeErr)
+			}
+			if err := term.Close(); err != closeErr || len(calls) != 2 {
+				t.Fatalf("두 번째 Close 는 복원을 반복하지 않아야 한다: %v, 호출 %v", err, calls)
+			}
+		})
 	}
 }
 

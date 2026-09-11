@@ -72,6 +72,64 @@ func TestUnmergedBranchIsNotMerged(t *testing.T) {
 	}
 }
 
+// 넓은 참조 사양의 PR과 중복 목적지에 비친 자기 사본은 push만 했다는 뜻이다. 실제 통합 브랜치에
+// 병합한 뒤에는 같은 사용자 참조 사양에서도 조상 검사로 merged가 되어야 한다.
+func TestMergedWithCustomTrackingRefspecs(t *testing.T) {
+	cases := []struct {
+		name        string
+		setup       func(t *testing.T, f *fixture)
+		target      string
+		localBranch string
+	}{
+		{
+			name: "넓은 사양에 포함된 열린 PR",
+			setup: func(t *testing.T, f *fixture) {
+				run(t, f.work, "git", "config", "remote.origin.fetch", "+refs/*:refs/remotes/origin/*")
+				run(t, f.work, "git", "push", "--quiet", "origin", "HEAD:refs/pull/1/head")
+			},
+			target: "refs/remotes/origin/heads/main",
+		},
+		{
+			name: "자기 브랜치의 두 번째 추적 사본",
+			setup: func(t *testing.T, f *fixture) {
+				run(t, f.work, "git", "config", "--add", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/extra/*")
+			},
+			target: "refs/remotes/origin/main",
+		},
+		{
+			name: "이름이 다른 upstream의 두 번째 추적 사본",
+			setup: func(t *testing.T, f *fixture) {
+				run(t, f.work, "git", "config", "--add", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/extra/*")
+			},
+			target:      "refs/remotes/origin/main",
+			localBranch: "local-feature",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.startFeature(t, "feature", "feature.txt", "아직 병합하지 않은 일")
+			tc.setup(t, f)
+			f.pushFeature(t, "feature")
+			if tc.localBranch != "" {
+				run(t, f.work, "git", "branch", "-m", tc.localBranch)
+			}
+			run(t, f.work, "git", "fetch", "--quiet", "origin")
+			if got := f.judgeMerged(t, f.self(t), []string{tc.target}); got.Yes {
+				t.Fatalf("push만 한 브랜치가 merged로 나왔다: %+v", got)
+			}
+
+			run(t, f.seed, "git", "fetch", "--quiet", "origin")
+			run(t, f.seed, "git", "merge", "--quiet", "--no-ff", "-m", "merge feature", "origin/feature")
+			run(t, f.seed, "git", "push", "--quiet", "origin", "main")
+			run(t, f.work, "git", "fetch", "--quiet", "origin")
+			if got := f.judgeMerged(t, f.self(t), []string{tc.target}); !got.Yes || !strings.HasPrefix(got.By, "ancestor:") {
+				t.Fatalf("실제 병합은 조상 검사로 잡혀야 한다: %+v", got)
+			}
+		})
+	}
+}
+
 // push 만 한 브랜치는 자기 사본(refs/remotes/<원격>/<브랜치>)이 HEAD 를 품지만 그것은 "올렸다"는 뜻이지
 // 끝난 작업이라는 뜻이 아니다. upstream 이 없거나 upstream 이 통합 브랜치(origin/main)인 브랜치가
 // 자기 사본 때문에 merged 가 되면 거짓 양성이고, 그 값은 worktree 삭제의 재료가 되므로 틀리면 안 된다.

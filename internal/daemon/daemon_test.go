@@ -154,17 +154,19 @@ func TestTakeWakeDoesNotSwallowConcurrentNotes(t *testing.T) {
 		if err := Wake(store, WakeHint{Workspace: "first"}); err != nil {
 			t.Fatal(err)
 		}
-		var wait sync.WaitGroup
-		wait.Add(1)
+		written := make(chan error, 1)
 		go func() {
-			defer wait.Done()
-			_ = Wake(store, WakeHint{Workspace: "second"})
+			written <- Wake(store, WakeHint{Workspace: "second"})
 		}()
-		_, _ = takeWake(store)
-		wait.Wait()
+		first, firstOK := takeWake(store)
+		if err := <-written; err != nil {
+			t.Fatal(err)
+		}
 
-		// 나중에 쓰인 쪽지는 아직 남아 다음 회차에 읽히거나, 방금 읽힌 둘 중 하나여야 한다.
-		if _, ok := takeWake(store); !ok {
+		// 마지막 쪽지는 첫 읽기에서 소비됐거나 다음 읽기에 남아 있어야 한다.
+		// 첫 읽기 전에 두 번째 쓰기가 끝나는 것도 정상적인 실행 순서다.
+		second, secondOK := takeWake(store)
+		if !(firstOK && first.Workspace == "second") && !(secondOK && second.Workspace == "second") {
 			lost++
 		}
 	}

@@ -19,6 +19,7 @@ import (
 
 	"herdr-git-upstream/internal/config"
 	"herdr-git-upstream/internal/gitrepo"
+	"herdr-git-upstream/internal/state"
 )
 
 // event는 herdr가 HERDR_PLUGIN_EVENT_JSON으로 넘겨주는 봉투 중 필요한 부분이다.
@@ -74,6 +75,16 @@ func WorktreeCreated(ctx context.Context, cfg config.Resolved, log *slog.Logger)
 	repo, err := git.Discover(ctx, info.Path)
 	if err != nil {
 		return Result{}, err
+	}
+	protected, err := state.New().FresheningSuppressed(repo.CommonDir, info.Branch)
+	if err != nil {
+		return Result{}, fmt.Errorf("생성 보호 기록을 확인하지 못했다: %w", err)
+	}
+	if protected {
+		if err := state.New().CompleteFresheningSuppression(repo.CommonDir, info.Branch); err != nil {
+			return Result{}, fmt.Errorf("생성 완료 기록을 남기지 못했다: %w", err)
+		}
+		return Result{}, ErrSkipped
 	}
 
 	// 갓 만든 worktree라면 깨끗해야 한다. 그렇지 않다면 우리가 아는 상황이 아니므로 손대지 않는다.

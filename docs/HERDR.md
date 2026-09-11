@@ -51,7 +51,8 @@ let base = params.base.unwrap_or_else(|| "HEAD".into());
 단축키로 여는 흐름도 `base: None`을 넘겨 같은 기본값을 쓴다(`src/app/api/worktrees.rs:2160`).
 fetch는 하지 않는다. 그래서 손에 쥔 브랜치가 뒤처져 있으면 새 worktree도 뒤처진 자리에서 시작한다.
 
-브랜치 이름이 이미 로컬에 있으면 그것을 체크아웃하고, 없으면 기준에서 새로 만든다.
+브랜치 이름이 이미 로컬에 있으면 `base`를 무시하고 그것을 체크아웃하며, 없으면 기준에서 새로 만든다.
+이름 앞뒤 공백은 생성 전에 제거한다(`src/app/api/worktrees/deferred.rs:100-109`).
 
 ```rust
 // src/worktree.rs:308
@@ -64,13 +65,54 @@ if local_branch_exists(...) { add_existing_branch } else { add -b ... base }
 
 ```rust
 // src/worktree.rs:34 branch_to_path_slug
-// 영숫자는 소문자로, 나머지 문자는 대시 하나로 줄이고, 앞뒤 대시를 뗀다
+// ASCII 영숫자는 소문자로, 나머지 문자는 대시 하나로 줄이고, 앞뒤 대시를 뗀다
+// 남는 문자가 없으면 worktree를 쓴다
 ```
 
 | 브랜치 | 디렉터리 |
 | --- | --- |
 | `widget-studio/agent-admin` | `widget-studio-agent-admin` |
 | `DEMO-1601-widget-preset-ui` | `demo-1601-widget-preset-ui` |
+
+### CLI 옵션과 생성 응답
+
+2026-09-10 설치된 herdr 0.9.0 의 `--help`와 `herdr api schema --json`으로 확인했다.
+
+```sh
+herdr worktree list --workspace <id>       # 또는 --cwd <path>
+herdr worktree create --workspace <id> --branch <name> --base <ref> --focus
+herdr worktree create --cwd <path> --branch <name> --base <ref> --path <path> --focus
+herdr worktree open --cwd <main-checkout> --path <path> --focus
+herdr worktree remove --workspace <id>
+herdr workspace focus <id>
+```
+
+목록은 같은 저장소의 worktree 전부와 `open_workspace_id`, `is_linked_worktree`, `is_prunable`,
+`is_detached`를 돌려준다. `source.repo_name`은 경로 미리보기에 쓰는 저장소 이름이다.
+목록은 연결된 worktree에서도 조회되지만, 생성·열기 요청의 source는 본 체크아웃이어야 한다
+(`src/app/api/worktrees.rs`의 `resolve_worktree_source`, `linked_worktree_source`).
+
+생성 성공은 `result.type = "worktree_created"`이며 실제 위치는 `result.worktree.path`다.
+`worktree.created` 이벤트 발행과 CLI 응답은 훅 완료를 기다리지 않는다
+(`src/app/api/worktrees/deferred.rs:462-477`). 생성 팝업이 고른 기준을 자동 최신화 훅에서 보호하려면
+CLI 호출 전에 의도를 남겨야 한다.
+
+`[worktrees] directory`로 worktree 뿌리를 바꿀 수 있으며 기본값은 `~/.herdr/worktrees`다
+(`src/config/model.rs:834-837,1153`).
+경로를 생략한 생성은 이 뿌리 아래 `<저장소 이름>/<브랜치 슬러그>`를 쓴다. 플러그인의 경로 표시는
+미리보기이며, 실제 위치는 herdr가 결정한다.
+
+### CLI 오류 봉투
+
+서버가 거절한 요청은 **종료 코드 1**, 표준 출력은 비어 있고 표준 오류에 JSON 봉투가 나온다.
+2026-09-10 읽기 전용 명령 `herdr worktree list --cwd /private/tmp`의 `not_git_worktree`와
+존재하지 않는 workspace 조회의 `workspace_not_found`로 확인했다.
+
+```json
+{"error":{"code":"workspace_not_found","message":"..."},"id":"..."}
+```
+
+따라서 명시적인 서버 거절은 표준 오류를 해석해 통신 불가와 구별한다. CLI 문법 오류는 종료 코드 2다.
 
 ### 삭제
 
@@ -91,6 +133,13 @@ herdr는 동시에 도는 플러그인 명령을 32개로 제한한다(`src/app/
 포커스 이벤트처럼 자주 발화하는 훅이 네트워크를 타면 그 자리를 오래 차지해 다른 플러그인의 훅까지
 밀린다. **이벤트 훅은 즉시 끝나야 한다.**
 
+### 로컬 link는 빌드하지 않는다
+
+`plugin link`는 manifest를 등록할 뿐 build 훅을 실행하지 않는다. 온라인·오프라인 경로 모두
+동일하다(`src/cli/plugin.rs:48-85,1099-1105`, `src/app/api/plugins/mod.rs:68-87`). 로컬에서는
+먼저 빌드해야 하며, 설치의 build 실행은 `src/cli/plugin.rs:210`에 있다.
+2026-09-10 link 직후 기존 0.1.0 바이너리가 남아 있음을 확인하고 빌드 후 0.2.0을 검증했다.
+
 ### startup 훅은 일회성이며 link/enable 때 발화하지 않는다
 
 서버가 세션을 복구할 때와 live handoff 때만 부른다(`src/app/api/plugins/runtime.rs:183`).
@@ -102,8 +151,10 @@ herdr는 동시에 도는 플러그인 명령을 32개로 제한한다(`src/app/
 `HERDR_SOCKET_PATH`, `HERDR_PLUGIN_EVENT`, `HERDR_PLUGIN_EVENT_JSON`, 그리고 문맥이 있을 때
 `HERDR_WORKSPACE_ID` / `HERDR_TAB_ID` / `HERDR_PANE_ID`(`src/app/api/plugins/runtime.rs:42-80`).
 
-셸에서 직접 부를 때는 이 값들이 없다. 그때 herdr와 다른 자리를 대안으로 고르면 설정이 무시되고
-잠금이 갈려 데몬이 둘 뜬다. herdr의 경로 계산을 그대로 옮겨 두었다(`internal/herdrpaths`).
+일반 셸에서는 플러그인 전용 설정·상태 경로가 없을 수 있다. 반면 herdr 페인의 셸에는
+`HERDR_WORKSPACE_ID` / `HERDR_TAB_ID` / `HERDR_PANE_ID`가 들어온다
+(`src/pane.rs:138-155,1961-1964`, `src/workspace.rs:363`). 경로 환경변수가 없을 때 herdr와
+다른 자리를 대안으로 고르면 설정이 무시되고 잠금이 갈려 데몬이 둘 뜬다. herdr의 경로 계산을 그대로 옮겨 두었다(`internal/herdrpaths`).
 
 | 용도 | 자리 | 출처 |
 | --- | --- | --- |
@@ -111,6 +162,9 @@ herdr는 동시에 도는 플러그인 명령을 32개로 제한한다(`src/app/
 | 상태 | `<상태 뿌리>/plugins/<id>` | `src/plugin_paths.rs:21` |
 
 뿌리는 `XDG_*`를 먼저 보고, 없으면 플랫폼 기본값을 쓴다(`src/config/io.rs:30-100`).
+herdr 자체 설정 파일은 `HERDR_CONFIG_PATH`가 설정되어 있으면 그 값을 그대로 쓰고,
+없으면 `<설정 뿌리>/config.toml`을 쓴다(`src/config/io.rs:169-174`). 플러그인의 setup, status와
+생성 팝업 경로 미리보기도 같은 경로를 읽는다.
 
 ### 이벤트 페이로드
 
@@ -125,6 +179,36 @@ herdr는 동시에 도는 플러그인 명령을 32개로 제한한다(`src/app/
 `placement`에 `overlay`, `popup`, `split`, `tab`, `zoomed`가 있다(`src/api/schema/plugins.rs:445`).
 방향키를 받는 대화형 화면이 실제로 돈다. 이미 설치된 fullerzz.sesh 피커가 Bubble Tea를,
 herdr-file-viewer가 crossterm을 쓴다.
+
+실행 중인 플러그인이 pane을 여는 CLI 통로는 다음과 같다(0.9.0 `--help` 실측).
+
+```sh
+herdr plugin pane open --plugin <id> --entrypoint <pane-id> --focus
+```
+
+CLI의 `--placement`는 `overlay|split|tab|zoomed`만 받으며 `popup`은 받지 않는다.
+매니페스트의 `[[panes]]`에는 `placement = "popup"`과 `width`/`height`가 있다.
+소스는 옵션이 없으면 매니페스트 값을 쓴다(`src/app/api/plugins/mod.rs:467`).
+2026-09-10 연결 후 `--placement` 없는 호출이 popup을 여는 것을 확인했고 사용자가 실제
+팝업 화면도 확인했다. popup은 일반 pane 목록에 나타나지 않으며 열기 응답도 pane ID 없이
+`result.type = "ok"`다(`src/app/api/plugins/panes.rs:11-43`). 같은 TUI의 키 입력 검증에는
+ID를 돌려주는 `--placement tab`을 사용했다.
+
+고정 크기는 `width = 64`, `height = 18`처럼 정수 셀 수로 쓴다. 문자열은 `"90%"`처럼
+백분율만 허용하며 `"64"`는 manifest 읽기 단계에서 거절된다(`src/popup_size.rs:36-40,118-140`).
+
+### popup의 저장소 문맥은 JSON으로 전달된다
+
+일반 tab/split과 달리 popup은 새 일반 페인의 workspace ID를 지정하지 않는다.
+`src/app/popup.rs:139`의 `without_pane_identity`는 기존 pane ID만 제거하며
+(`src/pane.rs:132-165`), workspace ID는 없거나 서버에서 물려받은 값일 수 있다.
+플러그인 pane의 기본 cwd도 호출한 저장소가 아니라 플러그인 뿌리다
+(`src/app/api/plugins/panes.rs:329-337`).
+
+호출한 워크스페이스는 `HERDR_PLUGIN_CONTEXT_JSON.workspace_id`로 전달된다
+(`src/app/api/plugins/panes.rs:18-21,240-267`). 두 화면은 명시한 `--cwd` 다음으로
+이 문맥을 우선한다. 2026-09-10 사용자 보고로 JSON을 읽지 않던 오류를 발견했다.
+일반 tab으로만 시험하면 올바른 workspace ID가 별도로 주입되어 이 오류가 드러나지 않는다.
 
 ### 매니페스트가 지원하는 것
 
@@ -149,7 +233,7 @@ herdr-file-viewer가 crossterm을 쓴다.
 ```toml
 # 키 설정. 평소 사용은 이 방법이다.
 [[keys.command]]
-key = "prefix+shift+w"
+key = "prefix+shift+u"
 type = "plugin_action"
 command = "<plugin-id>.<action-id>"
 description = "..."
@@ -159,6 +243,9 @@ description = "..."
 # CLI. 스크립트나 시험용.
 herdr plugin action invoke <action-id> --plugin <plugin-id>
 ```
+
+`rename_workspace = "prefix+shift+w"`는 herdr 기본 키다. 위 예의 `prefix+shift+u`는
+기본 키와 겹치지 않는다(`src/config/model.rs:1084-1091`).
 
 **키에 묶기 전에는 없는 것과 같다.** 액션만 만들어 두면 사용자가 찾을 방법이 없으므로,
 붙여 넣을 설정을 플러그인이 내놓아야 한다.
@@ -202,3 +289,10 @@ herdr는 워크스페이스가 어느 디렉터리에 속하는지를 첫 탭의
 
 이 플러그인은 데몬을 쓰므로 이 경로를 쓰지 않지만, herdr가 주기 실행을 제공한다는 사실 자체는
 기억해 둘 값어치가 있다.
+
+## 소스 기준
+
+위 경로와 행 번호는 [herdr v0.9.0](https://github.com/herdrdev/herdr/tree/v0.9.0)
+(`b99002ac99b09e00b4ca692436cb15a6b0d676f1`) 기준이다. CLI 옵션과 오류 봉투는 같은 버전의
+설치된 실행 파일로 2026-09-10 확인했다. 플러그인 연결 후 UI 실측 결과는
+[0.2.0 검증 기록](reviews/0.2.0-verification.md)에 기록했다.

@@ -423,14 +423,9 @@ func (s *Syncer) tokensFor(ctx context.Context, item target, now time.Time) map[
 	return tokens
 }
 
-// catchupKey는 따라잡기 기록의 열쇠다.
-//
-// fetch 기록의 열쇠(추적 참조 단위)에 브랜치를 더한다. 같은 추적 참조를 따라가는 브랜치가 둘 이상인
-// 일은 흔하다. herdr가 `git worktree add -b <새> <경로> origin/<브랜치>`로 만든 worktree들은 모두
-// 그 통합 브랜치를 upstream으로 갖는다. 추적 참조 단위로 두면 그 worktree들이 회차마다 서로의 캐시를
-// 지워 merge-tree가 매번 다시 돈다.
+// catchupKey는 따라잡기 기록의 열쇠다. 공식은 state.CatchupKey 에 있다. worktree 화면이 같은 캐시를 나눠 쓴다.
 func catchupKey(item target) string {
-	return state.Key(item.Upstream.FetchKey(item.Repo.CommonDir) + "\x00" + item.Upstream.Branch)
+	return state.CatchupKey(item.Upstream.FetchKey(item.Repo.CommonDir), item.Upstream.Branch)
 }
 
 // catchupConflicts는 따라잡을 때 충돌하는지 판정하고, 판정이 새로 계산되었으면 기록에 남긴다.

@@ -40,28 +40,39 @@ worktree 삭제는 경계에 걸쳐 있다. herdr-shear가 이미 잘하지만 �
 
 | 기능 | 상태 |
 | --- | --- |
-| 주기적 fetch (기본 60초, 저장소당 120초 스로틀) | 완료 |
+| 주기적 fetch (기본 60초, 저장소당 같은 참조 120초 스로틀) | 완료 |
 | `$behind` / `$ahead` / `$sync_stale` 토큰 보고 | 완료 |
 | 새 worktree 를 기준 브랜치 최신으로 빨리 감기 | 완료 |
+| 0. `setup` 설정 안내와 `status` 설정 진단 | 완료 (`cb9ea33`) |
+| 1·2. `$gone` / `$merged` / `$catchup` 판정 | 완료 (`d38cb4c`) |
+| 3. worktree 화면, 안전 판정 재확인과 삭제 | 완료 (`14a9820`, `889c9fe`) |
+| 4. 기준 브랜치를 고르는 생성 팝업 | 완료 (`4dcf54c`) |
+| 영문·한국어 README, 0.2.0 문서 정리 | 완료 |
+| 전체 교차 기능 검토 | 완료. [검토 기록](reviews/0.2.0-verification.md) |
+| herdr 연결 실측 | 연결·팝업·임시 저장소 생성/삭제·설정 적용 확인. 사용자가 mfe 사이드바 토큰 표시 확인 |
+| 팝업의 호출 저장소 선택 | 완료 (`28f7c92`). 사용자가 실제 `mfe · 27 worktrees` 확인 |
+| 첫 목록 표시 속도 | 완료 (`765b6f1`). 최초 inventory 표시와 배경 판정, 선택 경로 보존 |
+| mfe 통합 기준 설정 | 추가 전후 로컬 판정 비교 완료. 적용은 사용자 결정 |
 
-시험 53개가 통과하고 여섯 플랫폼에서 교차 컴파일된다. 아직 herdr 에 붙이지 않았다.
-
-구조는 이렇다. 별표는 앞으로 생길 디렉터리다.
+2026-09-10~11 전체 13개 패키지의 race 시험, vet, 여섯 플랫폼(linux/darwin/windows × amd64/arm64)
+교차 컴파일과 매니페스트 TOML 검사를 통과했다. herdr 0.9.0에 0.2.0을 연결해 실행했다.
+Windows 실행은 미실측이다. 후속 요청으로 사용자 config.toml에 검증한 설정을 추가했고 사용자가
+reload를 실행해 적용했다. 자세한 범위는 검토 기록에 남긴다.
 
 ```
 cmd/herdr-git-upstream/   명령 진입점
 internal/config/          설정 읽기, 토큰 이름 검사
 internal/daemon/          갱신 루프, 잠금, 쪽지, 워크스페이스 훑기
-internal/freshen/         새 worktree 최신화
+internal/freshen/         새 worktree 최신화, 명시적으로 고른 생성 기준 보호
 internal/gitrepo/         저장소 찾기, upstream 해석, fetch, 빨리 감기, 판정 재료
 internal/herdrcli/        herdr CLI 감싸기
 internal/herdrpaths/      herdr 와 같은 규칙으로 디렉터리 찾기
-internal/state/           fetch 기록, 데몬 잠금
-internal/herdrconfig/  *  사용자 config.toml 을 파싱 없이 훑기 (setup 과 경로 미리보기가 공유)
-internal/setup/        *  붙여 넣을 설정을 만들어 출력
-internal/judge/        *  gone / merged / 따라잡기 판정과 worktree 판정 규칙
-internal/tui/          *  의존성 없는 터미널 화면 기반 (raw 모드, 키 입력, 그리기)
-internal/worktreeui/   *  worktree 화면과 생성 팝업
+internal/state/           fetch·따라잡기·생성 보호 기록, 데몬 잠금
+internal/herdrconfig/     사용자 config.toml 훑기 (setup 과 경로 미리보기가 공유)
+internal/setup/           붙여 넣을 설정을 만들어 출력
+internal/judge/           gone / merged / 따라잡기 판정과 worktree 판정 규칙
+internal/tui/             터미널 화면 기반 (raw 모드, 키 입력, 그리기)
+internal/worktreeui/      worktree 화면과 생성 팝업
 ```
 
 ## 실측으로 확인한 사실
@@ -84,14 +95,14 @@ internal/worktreeui/   *  worktree 화면과 생성 팝업
 - 플러그인이 실행 중에 pane 을 여는 통로는 `herdr plugin pane open --plugin <id> --entrypoint <pane-id>
   [--placement overlay|split|tab|zoomed] [--focus]` 다. CLI 의 `--placement` 목록에는 `popup` 이 없고,
   매니페스트 `[[panes]]` 의 `placement` 에는 `popup` 과 `width`/`height` 가 있다.
-  `--placement` 를 비웠을 때 매니페스트 값을 따르는지는 붙여 본 뒤에 안다.
+  `--placement` 를 비우면 매니페스트의 popup을 따른다. 실제 연결과 사용자 화면으로 확인했다.
 - herdr 기본 키에 `rename_workspace = "prefix+shift+w"` 가 있다. `prefix+shift+u` 는 비어 있다.
 - herdr 는 `[worktrees] directory` (기본 `~/.herdr/worktrees`) 로 worktree 뿌리를 바꿀 수 있다.
 - 실제 저장소(mfe) 의 worktree 27개 가운데 22개가 git 자체 판정으로 upstream `[gone]` 이다.
   그중 조상 관계로 병합이 잡히는 것은 0개, merge-tree 비교로 잡히는 것은 7개다. 병합 대상은
   `origin/main` 이 아니라 `origin/widget-studio/dev` 인 경우가 많다.
 
-## 앞으로 넣을 것
+## 구현 명세 (0~4 완료)
 
 ### 0. `setup` 명령
 
@@ -190,7 +201,7 @@ fetch 기록의 `LastErrorPermanent` 가 이미 그 사실을 담고 있으므�
 통합 브랜치 각각을 별도의 fetch 작업으로 둔다. 현재 브랜치가 곧 통합 브랜치면 FetchKey 가 같아 한 번만
 가져간다. 스로틀은 기존 규칙을 그대로 따른다.
 
-**한계는 문서에 적는다.** `merged` 는 놓칠 수 있어도 틀리지는 않는다. 주된 신호는 `gone` 이다.
+**한계는 문서에 적는다.** `merged` 는 HEAD 내용의 포함 여부다. 실제 병합 이력이나 작업 완료를 보증하지 않으며, 다른 브랜치가 HEAD에서 갈라진 경우에도 조상 검사가 성립한다. 주된 신호는 `gone` 이다.
 
 ### 2. 따라잡을 때 충돌하는지 미리 보기 (`$catchup`)
 
@@ -207,7 +218,7 @@ fetch 기록의 `LastErrorPermanent` 가 이미 그 사실을 담고 있으므�
 
 - 뒤처짐이 0보다 클 때만 계산한다.
 - 결과를 (HEAD, 추적 참조 커밋) 쌍과 함께 fetch 기록에 저장하고, 쌍이 같으면 다시 계산하지 않는다.
-- git 2.38 미만이면 이 토큰만 조용히 쉰다. 나머지 기능은 git 2.5 이상에서 돈다.
+- git 2.38 미만이면 이 토큰만 조용히 쉰다. fetch 옵션은 git 2.29 이상이 필요하며, worktree 잠금·prunable 정보를 포함한 전체 기본 기능은 git 2.31 이상을 요구한다.
 
 ### 3. worktree 화면
 
@@ -246,14 +257,21 @@ herdr 에는 액션을 골라 실행하는 화면이 없고, 액션의 `contexts
  2 safe · d remove selected · D remove all safe · q close
 ```
 
-**저장소는 하나다.** 액션으로 열면 `HERDR_WORKSPACE_ID` 가 속한 저장소, 터미널에서 부르면 현재
-디렉터리의 저장소를 `herdr worktree list` 로 나열한다. 그 자리가 git 저장소가 아니면 그렇게 알리고 닫는다.
-herdr 에 닿지 않으면(데몬 없이 터미널에서 부른 경우 등) `git worktree list --porcelain` 으로 대신하되,
+**저장소는 하나다.** 두 화면의 선택 순서는 명시한 `--cwd`, 플러그인 호출 문맥
+(`HERDR_PLUGIN_CONTEXT_JSON.workspace_id`), `HERDR_WORKSPACE_ID`, 현재 디렉터리다.
+팝업의 현재 디렉터리는 플러그인 뿌리이므로 호출 문맥을 먼저 읽는다. 주어진 문맥이 잘못되었거나
+워크스페이스가 없으면 다른 저장소로 넘어가지 않고 오류로 종료한다.
+herdr 안의 일반 셸에도 워크스페이스 ID가 있으므로 `cd` 뒤 다른 저장소를 보려면 `--cwd`로 지정한다.
+선택한 저장소를 `herdr worktree list` 로 나열한다. 그 자리가 git 저장소가 아니면 그렇게 알리고 닫는다.
+팝업 호출 문맥만 있을 때 herdr에 닿지 않으면 원래 연결 오류로 종료한다. 저장소 디렉터리를 아는
+직접 실행에서 herdr에 닿지 않으면 `git worktree list --porcelain` 으로 대신하되,
 그때는 "herdr 에 열려 있음" 정보가 없다.
 
 **열릴 때 스스로 원격을 본다.** 데몬은 herdr 에 열린 워크스페이스만 돌기 때문에(mfe 는 27개 중 2개)
-나머지의 상태를 모른다. 열자마자 로컬 참조로 표를 먼저 그리고, 배경에서 두 명령을 나란히 돌린 뒤
-다시 그린다.
+나머지의 상태를 모른다. 먼저 목록 조회로 얻은 이름과 경로를 `pending`으로 즉시 표시한다.
+검사 중에도 이동·열기는 가능하지만 `d`·`D`는 막는다. 로컬 판정은 배경에서 계산하고, 완료 후
+판정 순서로 정렬하되 현재 선택된 worktree의 경로를 최초 선택부터 보존한다. 그 뒤 두 원격 명령을
+나란히 돌리고 결과를 다시 반영한다.
 
 - `git fetch --quiet --no-tags --no-prune --no-write-fetch-head <원격>` (전체 브랜치, 왕복 한 번)
 - `git ls-remote --heads <원격>` (사라진 브랜치 판정, 왕복 한 번)
@@ -277,7 +295,7 @@ prune 은 하지 않는다. README 의 약속을 지키고, 사용자의 참조�
 | 키 | 동작 |
 | --- | --- |
 | `↑` `↓` `j` `k` | 이동 |
-| `Enter` | herdr 에 열려 있으면 `herdr workspace focus <id>`, 아니면 `herdr worktree open --path <경로> --focus`. 그리고 화면을 닫는다 |
+| `Enter` | herdr 에 열려 있으면 `herdr workspace focus <id>`, 아니면 `herdr worktree open --cwd <본 체크아웃> --path <경로> --focus`. 그리고 화면을 닫는다 |
 | `d` | 선택한 것이 `safe` 면 확인 없이 지운다. 아니면 이유를 아래 줄에 보여 준다 |
 | `D` | `safe` 전부를 "Remove N worktrees? y/N" 한 번 묻고 지운다 |
 | `r` | 다시 fetch |
@@ -305,11 +323,9 @@ worktree 를 세는 일은 herdr 와 무관한 자리에서 하는 편이 맞다
 │  Branch  [widget-studio/dev-2]                         │
 │  Path    ~/.herdr/worktrees/mfe/widget-studio-dev-2    │
 │                                                        │
-│  Base                                                  │
-│  ▸ widget-studio/dev              current · ↓3 behind  │
-│    origin/widget-studio/dev       upstream · up to date│
-│    origin/main                    default · up to date │
-│    origin/widget-studio/dev       merge target         │
+│  Base  [widget-studio/dev · current                  ▾] │
+│                                                        │
+│  Enter 로 후보를 펼치고 ↑↓ 로 이동한 뒤 Enter 로 확정   │
 │                                                        │
 │  Tab switch · Enter create · Esc cancel                │
 └────────────────────────────────────────────────────────┘
@@ -317,16 +333,21 @@ worktree 를 세는 일은 herdr 와 무관한 자리에서 하는 편이 맞다
 
 정해 둔 규칙.
 
-- 기준 후보는 네 종류를 이 순서로 모으고 중복을 없앤다. 현재 브랜치, 그 upstream, 원격 기본 브랜치,
-  저장소에 지정된 통합 브랜치들. 지역 브랜치 전체를 나열하지는 않는다
-- 팝업이 열릴 때 후보들의 추적 참조를 좁게 fetch 해서 "↓3 behind" / "up to date" 를 채운다.
-  fetch 가 끝나기 전에도 입력은 받는다
-- 커서는 브랜치 칸에서 시작하고, 자동으로 채운 이름이 통째로 선택되어 있다. 타이핑하면 덮어써진다
+- 기준 후보는 현재 브랜치, 그 upstream, 원격 기본 브랜치, 저장소에 지정된 통합 브랜치를 먼저
+  모은다. 이어 로컬 브랜치와 로컬에 알려진 원격 추적 브랜치 전체를 이름순으로 표시한다.
+  전체 참조로 중복을 없애며 원격 HEAD 별명과 PR/tag 참조는 후보에서 뺀다
+- 팝업이 열릴 때 추천 후보의 추적 참조를 좁게 fetch 해서 "↓3 behind" / "up to date" 를 채운다.
+  추가 원격 후보는 기준으로 확정할 때 fetch한다. fetch가 끝나기 전에도 입력은 받는다
+- 커서는 브랜치 칸의 자동 이름 끝에서 시작한다. 입력하면 뒤에 붙고, Backspace는 마지막 글자를
+  하나씩 지운다. 긴 이름은 끝과 커서가 보이도록 왼쪽을 줄여 표시한다
 - 자동 이름은 기준 브랜치 이름(원격이면 `origin/` 을 뗀 것)에서 따오되 **언제나 비어 있는 이름**이다.
   겹치면 `-2`, `-3` 으로 넘어간다. 로컬 브랜치, 원격 추적 참조, 열려 있는 worktree 셋을 모두 보고
   빈 번호를 찾는다
 - 기준의 기본 선택은 현재 브랜치. 뒤처져 있어도 생성 직후 자동 최신화가 앞당긴다
-- 기준을 바꾸면 이름과 경로가 따라오되, 이름을 한 글자라도 직접 고친 뒤에는 덮어쓰지 않는다
+- 기준은 접힌 선택 필드에서 고른다. `Tab`으로 Base에 이동하고 `Enter`로 드롭다운을 열며,
+  `↑`/`↓`로 둘러보고 `Enter`로 확정한다. `Esc`는 드롭다운부터 닫는다. 이름 칸의 `Enter`는 생성한다.
+  목록의 현재 위치/전체 개수를 표시한다. 2026-09-10~11 사용자 실측 피드백을 반영했다
+- 기준을 확정하면 이름과 경로가 따라오되, 이름을 한 글자라도 직접 고친 뒤에는 덮어쓰지 않는다
 - 경로 미리보기는 `<[worktrees] directory>/<저장소 이름>/<슬러그>` 다. 뿌리는 config.toml 을
   `internal/herdrconfig` 로 훑어 읽고, 없으면 `~/.herdr/worktrees`. 슬러그는 herdr 의
   `branch_to_path_slug` 규칙(영숫자는 소문자로, 나머지는 대시 하나로, 앞뒤 대시 제거)을 그대로 옮긴다
@@ -360,7 +381,7 @@ herdr 의 자리 규칙을 그대로 쓴다.
 모두 마친 뒤 한 번에 한다. 삭제처럼 되돌릴 수 없는 동작은 실제 저장소가 아니라 임시 저장소에서만
 시험한다.
 
-## 터미널 화면 기반 (3번에서 만든다)
+## 터미널 화면 기반 (3번에서 구현)
 
 의존성 없이 간다. raw 모드는 플랫폼마다 다르지만 표준 라이브러리로 닿는다.
 
@@ -375,10 +396,9 @@ herdr 의 자리 규칙을 그대로 쓴다.
 
 ## 문서 마무리
 
-- README 는 지금 한국어로 둔다. 작업이 끝나면 영문을 `README.md` 로 기본으로 두고, 한국어는
-  `README.ko.md` 로 옮겨 서로 링크한다.
-- 판 번호를 0.2.0 으로 올린다.
-- HERDR.md 에 이번에 실측한 herdr 동작(plugin pane open 통로, worktree CLI 옵션, 기본 키, worktree 뿌리 설정)을 더한다.
+- 영문 `README.md` 를 기본으로 두고, 한국어 `README.ko.md` 와 서로 링크한다.
+- 실행 파일과 매니페스트의 판 번호는 0.2.0 이다.
+- HERDR.md 에 herdr 0.9.0 의 CLI 통로, 오류 봉투, 기본 키와 worktree 뿌리 설정을 기록했다.
 
 ## 열린 질문
 

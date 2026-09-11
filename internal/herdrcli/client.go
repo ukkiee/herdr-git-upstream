@@ -231,12 +231,54 @@ func (c *Client) WorktreeRemove(ctx context.Context, workspaceID string) error {
 }
 
 // WorktreeOpen은 디스크에만 있는 worktree를 herdr 워크스페이스로 열고 그리로 옮겨 간다.
-func (c *Client) WorktreeOpen(ctx context.Context, path string) error {
-	if path == "" {
-		return fmt.Errorf("경로가 비어 있다")
+func (c *Client) WorktreeOpen(ctx context.Context, sourceCWD, path string) error {
+	if sourceCWD == "" || path == "" {
+		return fmt.Errorf("본 체크아웃과 worktree 경로가 모두 있어야 한다")
 	}
-	_, err := c.run(ctx, "worktree", "open", "--path", path, "--focus")
+	_, err := c.run(ctx, "worktree", "open", "--cwd", sourceCWD, "--path", path, "--focus")
 	return err
+}
+
+// WorktreeCreate는 선택한 기준으로 worktree를 만들고 그 워크스페이스로 이동한다.
+// --path를 보내지 않아 herdr의 worktree 디렉터리 설정을 따른다. 큰 저장소 체크아웃은 조회보다 오래 걸린다.
+func (c *Client) WorktreeCreate(ctx context.Context, workspaceID, cwd, branch, base string) (string, error) {
+	if branch == "" || base == "" {
+		return "", fmt.Errorf("브랜치 이름과 기준 참조가 모두 있어야 한다")
+	}
+	const createTimeout = 60 * time.Second
+	out, err := c.runWithTimeout(ctx, createTimeout, worktreeCreateArgs(workspaceID, cwd, branch, base)...)
+	if err != nil {
+		return "", err
+	}
+	return parseWorktreeCreated(out)
+}
+
+func worktreeCreateArgs(workspaceID, cwd, branch, base string) []string {
+	args := []string{"worktree", "create", "--branch", branch, "--base", base, "--focus"}
+	if workspaceID != "" {
+		return append(args, "--workspace", workspaceID)
+	}
+	if cwd != "" {
+		return append(args, "--cwd", cwd)
+	}
+	return args
+}
+
+// herdr 0.9.0의 api schema --json: worktree_created 응답은 result.worktree.path를 제공한다.
+func parseWorktreeCreated(out []byte) (string, error) {
+	var parsed struct {
+		Result struct {
+			Type     string       `json:"type"`
+			Worktree WorktreeItem `json:"worktree"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return "", fmt.Errorf("worktree create 응답을 해석하지 못했다: %w", err)
+	}
+	if parsed.Result.Type != "worktree_created" || parsed.Result.Worktree.Path == "" {
+		return "", fmt.Errorf("worktree create가 끝났지만 생성 경로를 확인하지 못했다")
+	}
+	return parsed.Result.Worktree.Path, nil
 }
 
 // WorkspaceFocus는 이미 열려 있는 워크스페이스로 옮겨 간다.
@@ -319,6 +361,9 @@ func (c *Client) runWithTimeout(ctx context.Context, timeout time.Duration, args
 	cmd.Stdin = nil
 
 	if err := cmd.Run(); err != nil {
+		if rejected := responseError(stderr.Bytes()); rejected != nil {
+			return nil, fmt.Errorf("herdr %s 실패: %w", strings.Join(args, " "), rejected)
+		}
 		detail := strings.TrimSpace(stderr.String())
 		if detail == "" {
 			detail = strings.TrimSpace(stdout.String())
@@ -329,6 +374,38 @@ func (c *Client) runWithTimeout(ctx context.Context, timeout time.Duration, args
 		return nil, fmt.Errorf("herdr %s 실패: %w", strings.Join(args, " "), err)
 	}
 	return stdout.Bytes(), nil
+}
+
+// ResponseError는 herdr 가 표준 오류의 JSON 봉투에 실어 보낸 거절이다.
+// Code 는 `workspace_not_found` 같은 herdr 의 오류 이름이다.
+type ResponseError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func (e *ResponseError) Error() string {
+	if e.Message == "" {
+		return e.Code
+	}
+	return e.Code + ": " + e.Message
+}
+
+// responseError는 표준 오류의 오류 봉투를 읽는다. 봉투가 아니면 nil 이다.
+//
+// herdr 0.9.0 은 서버의 거절을 종료 코드 1, 표준 오류의 JSON 으로 알린다(2026-09-10 실측).
+// 오류 이름을 보존해야 호출자가 서버의 거절과 서버에 닿지 못한 경우를 구분할 수 있다.
+// 봉투가 아니면 runWithTimeout 이 원래 실행 오류와 표준 오류 문구를 사용한다.
+func responseError(out []byte) error {
+	var envelope struct {
+		Error *ResponseError `json:"error"`
+	}
+	if err := json.Unmarshal(out, &envelope); err != nil || envelope.Error == nil {
+		return nil
+	}
+	if envelope.Error.Code == "" && envelope.Error.Message == "" {
+		return nil
+	}
+	return envelope.Error
 }
 
 func truncate(s string, limit int) string {

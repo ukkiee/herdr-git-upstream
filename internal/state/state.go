@@ -1,8 +1,8 @@
 // Package state는 재시작을 넘겨 기억해야 하는 것들을 파일로 남긴다.
 //
-// 네 가지를 다룬다. 참조마다의 fetch 기록은 스로틀과 실패 표시의 근거다. 원격마다의 저장소 기록은
+// 다섯 가지를 다룬다. 참조마다의 fetch 기록은 스로틀과 실패 표시의 근거다. 원격마다의 저장소 기록은
 // 원격에 물어 알아낸 기본 브랜치를 기억한다. 브랜치마다의 따라잡기 기록은 merge-tree 판정의 캐시다.
-// 데몬 잠금은 같은 데몬이 여러 개 뜨는 것을 막는다.
+// 팝업 생성 기록은 선택한 기준을 자동 최신화에서 보호한다. 데몬 잠금은 같은 데몬이 여러 개 뜨는 것을 막는다.
 //
 // 따라잡기 기록을 fetch 기록 안에 두지 않고 따로 두는 이유가 있다. fetch 기록은 서버가 달라도 나눠
 // 쓰는 파일이라, 판정 경로가 그 파일을 읽고-고치고-쓰면 그 사이에 다른 데몬이 남긴 fetch 결과를
@@ -231,6 +231,19 @@ type CatchupRecord struct {
 	// CheckedUnix는 판정한 시각이다. unknown은 일시적인 이유(제한 시간)일 수 있어 이 시각을 보고
 	// 한동안만 쉰 뒤 다시 시도한다. clean과 conflict는 두 커밋만으로 정해지므로 시각을 보지 않는다.
 	CheckedUnix int64 `json:"checked_unix,omitempty"`
+}
+
+// CatchupKey는 따라잡기 기록의 열쇠다. fetch 기록의 열쇠(추적 참조 단위)에 브랜치를 더한다.
+//
+// 같은 추적 참조를 따라가는 브랜치가 둘 이상인 일은 흔하다. herdr 가 `git worktree add -b <새> <경로>
+// origin/<브랜치>` 로 만든 worktree 들은 모두 그 통합 브랜치를 upstream 으로 갖는다. 추적 참조 단위로 두면
+// 그 worktree 들이 회차마다 서로의 캐시를 지워 merge-tree 가 매번 다시 돈다.
+//
+// 기록과 같은 자리에 두는 이유가 있다. 데몬과 worktree 화면이 같은 캐시를 나눠 쓰는데, 열쇠 공식이 두 곳에
+// 따로 적혀 있으면 한쪽만 고쳐져 서로 다른 파일을 보게 되고 그 어긋남은 시험이 아니라 느려진 화면이 먼저 알린다.
+// fetchKey 는 gitrepo.Upstream.FetchKey 가 만든 값이다.
+func CatchupKey(fetchKey, branch string) string {
+	return Key(fetchKey + "\x00" + branch)
 }
 
 func (s Store) catchupRecordPath(key string) string {

@@ -254,18 +254,18 @@ func (r Runner) TargetFromShortRef(ctx context.Context, repo Repo, short string)
 //
 // 브랜치가 아닌 것도 뺀다. `+refs/pull/*/head:refs/remotes/origin/pr/*` 같은 참조 사양(GitHub와 gh가
 // 흔히 넣는다)은 열린 PR의 head를 refs/remotes/ 아래로 가져오는데, 자기 PR의 head는 언제나 HEAD를
-// 품고 있으므로 그것을 세면 병합되지 않은 브랜치가 merged가 된다. 원격에 설정된 참조 사양 가운데
-// 출발지가 브랜치가 아닌 것의 목적지에 맞는 참조는 브랜치가 아니다.
+// 품고 있으므로 그것을 세면 병합되지 않은 브랜치가 merged가 된다. refs/* 같은 넓은 참조 사양도
+// 브랜치와 PR을 함께 가져오므로, 각 추적 참조를 원격 쪽 출발지로 돌려서 브랜치인지 확인한다.
 func (r Runner) ContainingRemoteRefs(ctx context.Context, repo Repo, commit string) ([]string, error) {
 	out, err := r.git(ctx, repo.Root, localTimeout,
 		"for-each-ref", "--format=%(refname)", "--contains", commit, "refs/remotes/")
 	if err != nil {
 		return nil, err
 	}
-	nonBranch := r.nonBranchTrackingPatterns(ctx, repo)
+	specs := r.allFetchRefspecs(ctx, repo)
 	var refs []string
 	for _, line := range splitLines(out) {
-		if line == "" || strings.HasSuffix(line, "/HEAD") || matchesAnyRefPattern(nonBranch, line) {
+		if line == "" || strings.HasSuffix(line, "/HEAD") || isNonBranchTrackingRef(specs, line) {
 			continue
 		}
 		refs = append(refs, line)
@@ -273,27 +273,24 @@ func (r Runner) ContainingRemoteRefs(ctx context.Context, repo Repo, commit stri
 	return refs, nil
 }
 
-// nonBranchTrackingPatterns는 브랜치가 아닌 것을 refs/remotes/ 아래로 비추는 참조 사양들의 목적지
-// 패턴을 모은다. 등록된 원격 전부를 본다. PR 참조는 어느 원격에나 설정될 수 있기 때문이다.
-func (r Runner) nonBranchTrackingPatterns(ctx context.Context, repo Repo) []string {
+// allFetchRefspecs는 등록된 원격 전부의 참조 사양을 모은다. PR 참조는 어느 원격에나 설정될 수 있다.
+func (r Runner) allFetchRefspecs(ctx context.Context, repo Repo) []refspec {
 	remotes, err := r.Remotes(ctx, repo)
 	if err != nil {
 		return nil
 	}
-	var patterns []string
+	var specs []refspec
 	for _, remote := range remotes {
-		for _, spec := range r.fetchRefspecs(ctx, repo, remote) {
-			if !branchSource(spec.source) {
-				patterns = append(patterns, spec.destination)
-			}
-		}
+		specs = append(specs, r.fetchRefspecs(ctx, repo, remote)...)
 	}
-	return patterns
+	return specs
 }
 
-func matchesAnyRefPattern(patterns []string, ref string) bool {
-	for _, pattern := range patterns {
-		if _, ok := matchRefspecSide(pattern, ref); ok {
+// 겹치는 사양 중 하나라도 브랜치 아닌 출발지를 가리키면 근거에서 뺀다. 같은 목적지를 넓은 브랜치
+// 사양과 좁은 PR 사양이 함께 덮을 수 있으므로, 브랜치 사양 하나와 맞았다고 먼저 허용하면 안 된다.
+func isNonBranchTrackingRef(specs []refspec, ref string) bool {
+	for _, spec := range specs {
+		if source, ok := substituteRefspec(spec.destination, spec.source, ref); ok && !strings.HasPrefix(source, "refs/heads/") {
 			return true
 		}
 	}
