@@ -112,6 +112,16 @@ not exist, all settings use their defaults.
 An empty token name disables reporting for that token. Configuration is reread on every pass, so you
 can change the interval without restarting herdr.
 
+The interval above controls scheduled fetch passes. Independently, a local watcher checks reference
+metadata once a second for workspaces discovered by a successful pass. It reads shared refs once per
+repository and each checkout's HEAD, including linked worktrees. It does not scan work files or object
+contents. Unchanged checks execute no Git commands, fetches, or metadata reports. A changed repository
+or checkout recalculates its tokens; a failed report retries on the next check. Reporting rereads HEAD
+and is serialized so a slow fetch cannot overwrite a newer local pull result with its old HEAD.
+New or moved workspaces are discovered by the existing focus/scheduled passes. `gone` and `stale`
+continue to use plugin fetch records; detecting a local ref change does not establish remote success.
+Detection runs independently of fetch, but Git calculations and herdr reporting still take time.
+
 ## Worktree screen
 
 With more than a handful of worktrees, remembering which jobs are finished becomes difficult. Sidebar
@@ -209,7 +219,16 @@ the remote default branch, and the repository's configured integration branches 
 all local branches and known remote-tracking branches in name order. Each distinct ref appears once;
 remote HEAD aliases and pull-request/tag refs are excluded. The menu shows your position and total count.
 `Base` starts collapsed: press `Tab` to focus it, then `Enter` to
-open the dropdown. Use `↑`/`↓` and `Enter` to confirm a base. Return to the branch-name field with `Tab`
+open the dropdown. Type to filter branch labels by a case-insensitive substring, then use `↑`/`↓` and
+`Enter` to confirm a match. The menu shows the position among matches, match count, and total candidate
+count. `Backspace` edits the query; closing the menu clears it. An empty result cannot be selected.
+The collapsed field fits its label. The menu is at most 38 columns wide and shows up to four candidates,
+with the search input in its top border and counts in its bottom border. The highlighted candidate's
+type and fetch status appear below. Long labels retain their beginning and ending around an ellipsis.
+Matching text is emphasized in bold cyan without changing the branch name's original case or the
+selected row. Matching is done before shortening; only visible portions of a match are emphasized,
+and the inserted ellipsis is left unstyled. Clearing the query removes the emphasis.
+Return to the branch-name field with `Tab`
 and press `Enter` to create. Browsing the dropdown does not change the confirmed base or suggested name.
 
 Use `herdr plugin action invoke new-worktree --plugin git-upstream` to open it in a herdr pane.
@@ -232,18 +251,27 @@ edit your configuration or key bindings for you.
 
 The suggested name comes from the base branch and avoids names already used by local branches,
 remote-tracking branches, or worktrees. If occupied, it tries `-2`, `-3`, and so on. The next suggestion
-after `feature-2` is `feature-3`. The cursor starts at the end: typing appends and `Backspace` removes
-the last character. Long names scroll to keep the end and cursor visible.
+after `feature-2` is `feature-3`. The cursor starts at the end. Use `←`/`→` to move it; typing inserts at
+the cursor and `Backspace` removes the preceding character. Long names scroll to keep the cursor visible.
+At the end of the name, the closing bracket marks the insertion position without an extra blank cell.
+Moving focus to `Base` hides the name cursor.
 Once you edit the name, changing the base no longer overwrites your input.
+
+Warnings wrap to the popup width. `F1` opens the complete message, including text that cannot fit in
+the form. Use `↑`/`↓` to scroll; `Enter`, `Esc`, or `F1` returns to the form without creating a worktree
+or changing your input. A warning about a previous incomplete creation means its protection record
+is still pending; an existing branch name alone does not produce this warning.
 
 | Key | Action |
 | --- | --- |
 | `Tab` | Switch between the name and base fields; discard an open menu |
 | `↑` `↓` | Move the highlight in the open base dropdown |
-| Characters and `Backspace` | Enter or edit the name |
+| `←` `→` | Move the cursor in the branch-name field |
+| Characters and `Backspace` | Edit the name, or the search query while the base dropdown is open |
 | `Enter` | Name field: create. Base field: open dropdown. Open dropdown: confirm the highlighted base |
 | `Esc` | Close the dropdown first; when closed, cancel the popup |
 | `Ctrl-C` | Cancel the popup |
+| `F1` | Open the full message; in the message view, return to the form |
 
 Recommended remote candidates are fetched individually after the popup opens. Other remote branches
 are fetched when confirmed as the base, so opening a large list does not fetch every branch.
