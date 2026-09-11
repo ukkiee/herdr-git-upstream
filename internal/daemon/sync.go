@@ -28,11 +28,13 @@ const maxTokenTTL = 24 * time.Hour
 
 // Syncer는 한 번의 갱신에 필요한 것들을 모아 둔다.
 type Syncer struct {
-	Config config.Resolved
-	Herdr  *herdrcli.Client
-	Git    gitrepo.Runner
-	Store  state.Store
-	Log    *slog.Logger
+	Config  config.Resolved
+	Herdr   *herdrcli.Client
+	Git     gitrepo.Runner
+	Store   state.Store
+	Log     *slog.Logger
+	localMu sync.Mutex
+	watched map[string]*watchedTarget
 }
 
 // NewSyncer는 설정에 맞춘 Syncer를 만든다.
@@ -103,6 +105,7 @@ func (s *Syncer) Sweep(ctx context.Context, onlyWorkspace string, force bool) er
 		s.Log.Debug("워크스페이스 목록을 읽지 못했다", "error", err)
 	}
 	targets := s.resolveTargets(ctx, panes, anchors, onlyWorkspace)
+	s.forgetMissingTargets(targets, onlyWorkspace)
 	if len(targets) == 0 {
 		return nil
 	}
@@ -332,15 +335,39 @@ func (s *Syncer) fetchOne(ctx context.Context, item fetchJob, stateKey string, r
 
 // reportAll은 워크스페이스마다 사이드바 토큰을 보고한다.
 func (s *Syncer) reportAll(ctx context.Context, targets []target) {
-	now := time.Now()
-	ttl := s.tokenTTL()
+	s.localMu.Lock()
+	defer s.localMu.Unlock()
+	if s.watched == nil {
+		s.watched = map[string]*watchedTarget{}
+	}
+	sharedStates := map[string]gitrepo.LocalStamp{}
 	for _, item := range targets {
-		tokens := s.tokensFor(ctx, item, now)
-		if err := s.Herdr.ReportMetadata(ctx, item.WorkspaceID, Source, tokens, ttl); err != nil {
-			// 기본 로그 수준에서도 보이게 한다. 보고가 거절되면 사이드바에 아무것도 뜨지 않는데,
-			// 그 이유가 어디에도 남지 않으면 사용자는 플러그인이 그냥 안 되는 줄로 안다.
-			s.Log.Warn("토큰 보고 실패", "workspace", item.WorkspaceID, "error", err)
+		watched := &watchedTarget{item: item}
+		if item.HasRepo {
+			paths, err := s.Git.LocalPaths(ctx, item.Repo)
+			if err != nil {
+				delete(s.watched, item.WorkspaceID)
+				s.reportLocalLocked(ctx, watched)
+				continue
+			}
+			watched.paths = paths
+			shared, ok := sharedStates[paths.CommonDir]
+			var sharedErr error
+			if !ok {
+				shared, sharedErr = gitrepo.SharedLocalState(paths.CommonDir)
+				if sharedErr == nil {
+					sharedStates[paths.CommonDir] = shared
+				}
+			}
+			checkout, checkoutErr := gitrepo.CheckoutLocalState(paths.GitDir)
+			if sharedErr == nil && checkoutErr == nil {
+				watched.shared, watched.checkout = shared, checkout
+				s.watched[item.WorkspaceID] = watched
+			}
+		} else {
+			delete(s.watched, item.WorkspaceID)
 		}
+		s.reportLocalLocked(ctx, watched)
 	}
 }
 
@@ -469,6 +496,9 @@ func (s *Syncer) tokenTTL() time.Duration {
 
 // clearAll은 이 플러그인이 올린 토큰을 모두 지운다. 설정에서 꺼졌을 때 쓴다.
 func (s *Syncer) clearAll(ctx context.Context) error {
+	s.localMu.Lock()
+	defer s.localMu.Unlock()
+	s.watched = nil
 	panes, err := s.Herdr.PaneList(ctx)
 	if err != nil {
 		return err
