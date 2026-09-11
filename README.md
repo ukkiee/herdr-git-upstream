@@ -56,7 +56,7 @@ one fast-forward immediately after creation.
 ## Installation
 
 ```sh
-herdr plugin install <owner>/herdr-git-upstream
+herdr plugin install ukkiee/herdr-git-upstream
 ```
 
 For local development, link your checkout:

@@ -54,7 +54,7 @@ let base = params.base.unwrap_or_else(|| "HEAD".into());
 ## 설치
 
 ```sh
-herdr plugin install <owner>/herdr-git-upstream
+herdr plugin install ukkiee/herdr-git-upstream
 ```
 
 로컬에서 개발 중이라면 이렇게 붙인다.
