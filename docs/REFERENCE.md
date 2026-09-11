@@ -34,9 +34,11 @@ custom token names from the plugin configuration. It leaves the file unchanged. 
 existing tables, then run `herdr config check && herdr server reload-config`.
 
 The creation binding printed by `setup` is an optional, commented example that replaces herdr's
-built-in creation key. The [README](../README.md#keyboard-shortcuts) instead shows a separate
-`prefix+shift+i` binding. Choose one; the plugin does not assign keys automatically. `setup` omits the
-creation example when all required sidebar tokens and the worktrees binding are present.
+built-in creation key; its worktree-screen example uses `prefix+shift+u`.
+The [README](../README.md#keyboard-shortcuts) instead uses `prefix+shift+w` for Worktrees, after freeing
+the default workspace-renaming key, and `prefix+shift+c` for Create. Choose one set of bindings; the
+plugin does not assign keys automatically. `setup` omits the creation example when all required
+sidebar tokens and the worktrees binding are present.
 
 If you only need fetch and do not use worktrees, herdr's built-in `git_status` token may be enough:
 

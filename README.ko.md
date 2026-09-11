@@ -147,22 +147,33 @@ herdr plugin action invoke new-worktree --plugin git-upstream
 원하면 다음 **설정 예제**를 `config.toml`에 추가하세요. 기존 설정에서 비어 있는 키를 선택하면 됩니다.
 추가 후 `herdr config check && herdr server reload-config`를 실행하면 적용됩니다.
 
+**W는 Worktrees**, **C는 Create**로 기억하세요. herdr는 기본적으로 `prefix+shift+w`를 워크스페이스
+이름 변경에 사용합니다. 기본값을 쓰고 있다면 먼저 `rename_workspace`를 다른 빈 키로 옮기세요. 예를 들면:
+
+```toml
+[keys]
+rename_workspace = "prefix+shift+comma"
+```
+
+`[keys]` 테이블을 중복 추가하지 말고 기존 테이블을 수정하세요. 이름 변경을 이미 다른 키로 옮겼다면
+그 설정을 유지하세요. 이어서 플러그인 명령을 추가합니다.
+
 ```toml
 [[keys.command]]
-key = "prefix+shift+u"
+key = "prefix+shift+w"
 type = "plugin_action"
 command = "git-upstream.worktrees"
 description = "git upstream: worktrees"
 
 [[keys.command]]
-key = "prefix+shift+i"
+key = "prefix+shift+c"
 type = "plugin_action"
 command = "git-upstream.new-worktree"
 description = "git upstream: new worktree"
 ```
 
-설정한 prefix를 누른 뒤 `Shift+U`로 worktree 화면, `Shift+I`로 생성 팝업을 엽니다.
-예를 들어 prefix가 `Ctrl+A`라면 생성 팝업은 `Ctrl+A` → `Shift+I`입니다.
+설정한 prefix를 누른 뒤 `Shift+W`로 worktree 화면, `Shift+C`로 생성 팝업을 엽니다.
+예를 들어 prefix가 `Ctrl+A`라면 생성 팝업은 `Ctrl+A` → `Shift+C`입니다.
 이 키는 사용자 설정이며 플러그인이 자동으로 지정하는 단축키가 아닙니다.
 
 ### 설정과 도움말

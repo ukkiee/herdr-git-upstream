@@ -148,22 +148,33 @@ for path selection, existing branch names, and upstream handling.
 Optionally add these **example bindings** to `config.toml`, choosing unused keys in your configuration.
 They take effect after `herdr config check && herdr server reload-config`.
 
+Use **W for Worktrees** and **C for Create**. herdr assigns `prefix+shift+w` to workspace renaming by
+default. If you still use that default, move `rename_workspace` to an unused key first, for example:
+
+```toml
+[keys]
+rename_workspace = "prefix+shift+comma"
+```
+
+Edit the existing `[keys]` table instead of adding a duplicate. If renaming already uses another key,
+keep that binding. Then add the plugin commands:
+
 ```toml
 [[keys.command]]
-key = "prefix+shift+u"
+key = "prefix+shift+w"
 type = "plugin_action"
 command = "git-upstream.worktrees"
 description = "git upstream: worktrees"
 
 [[keys.command]]
-key = "prefix+shift+i"
+key = "prefix+shift+c"
 type = "plugin_action"
 command = "git-upstream.new-worktree"
 description = "git upstream: new worktree"
 ```
 
-Press your configured prefix, then `Shift+U` for the worktree screen or `Shift+I` for creation.
-For example, with a `Ctrl+A` prefix, creation is `Ctrl+A` → `Shift+I`.
+Press your configured prefix, then `Shift+W` for the worktree screen or `Shift+C` for creation.
+For example, with a `Ctrl+A` prefix, creation is `Ctrl+A` → `Shift+C`.
 These keys are user configuration, not shortcuts assigned automatically by the plugin.
 
 ### Settings and help

@@ -34,9 +34,10 @@ herdr plugin link "$PWD"
 `herdr config check && herdr server reload-config`를 실행한다.
 
 `setup`이 출력하는 생성 키는 herdr 내장 생성 키를 대체하는 선택 예제이며 주석 처리되어 있다.
-[README](../README.ko.md#단축키)는 별도의 `prefix+shift+i` 설정을 안내한다. 둘 중 하나를 고르면 된다.
-플러그인이 키를 자동으로 지정하지는 않는다. 필수 사이드바 토큰과 worktrees 키가 이미 있으면
-`setup`은 생성 키 예제를 생략한다.
+worktree 화면 예제는 `prefix+shift+u`를 쓴다. [README](../README.ko.md#단축키)는 기본 워크스페이스
+이름 변경 키를 비운 뒤 `prefix+shift+w`(Worktrees)와 `prefix+shift+c`(Create)를 쓰도록 안내한다.
+둘 중 한 구성을 고르면 된다. 플러그인이 키를 자동으로 지정하지는 않는다. 필수 사이드바 토큰과
+worktrees 키가 이미 있으면 `setup`은 생성 키 예제를 생략한다.
 
 worktree 없이 fetch만 필요하면 herdr 내장 `git_status` 토큰을 사용할 수 있다.
 
