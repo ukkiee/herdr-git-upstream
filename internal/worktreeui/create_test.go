@@ -3,8 +3,10 @@ package worktreeui
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"herdr-git-upstream/internal/gitrepo"
 	"herdr-git-upstream/internal/tui"
@@ -54,7 +56,7 @@ func TestCreateNamingAndPath(t *testing.T) {
 }
 
 func createSample() CreateModel {
-	return CreateModel{RepoName: "mfe", Name: "widget-studio/dev-2", PathRoot: "/worktrees", Taken: map[string]bool{"widget-studio/dev": true, "main": true}, Candidates: []Candidate{
+	return CreateModel{RepoName: "mfe", Name: "widget-studio/dev-2", NameCursor: len("widget-studio/dev-2"), PathRoot: "/worktrees", Taken: map[string]bool{"widget-studio/dev": true, "main": true}, Candidates: []Candidate{
 		{Label: "widget-studio/dev", Ref: "refs/heads/widget-studio/dev", Kind: CandidateCurrent, Status: "↓3 behind"},
 		{Label: "team/upstream/main", Ref: "refs/remotes/team/upstream/main", Kind: CandidateUpstream, Fetch: gitrepo.Upstream{Remote: "team/upstream", RemoteRef: "refs/heads/main", TrackingRef: "refs/remotes/team/upstream/main"}, Status: "fetching…"},
 	}}
@@ -105,6 +107,301 @@ func TestUpdateCreate(t *testing.T) {
 	}
 	if _, action := UpdateCreate(m, tui.Key{Kind: tui.KeyCtrlC}); action != CreateCancel {
 		t.Fatal("busy cancel must reach controller")
+	}
+}
+
+func TestCreateEditsNameAtArrowCursor(t *testing.T) {
+	m := createSample()
+	keys, _ := tui.ParseKeys([]byte("\x1b[D\x1b[D한\x1b[C\x7f"))
+	for _, k := range keys {
+		m, _ = UpdateCreate(m, k)
+	}
+	if m.Name != "widget-studio/dev한2" || !m.UserEdited {
+		t.Fatalf("middle insertion and backspace: %q", m.Name)
+	}
+	view := strings.Join(RenderCreate(m, 64, 18), "\n")
+	if !strings.Contains(view, "dev한"+tui.Reverse("2")+"]") {
+		t.Fatalf("cursor must mark the next character: %s", view)
+	}
+}
+
+func TestCreateNameFieldHasNoCursorPadding(t *testing.T) {
+	m := createSample()
+	m.Name, m.NameCursor = "main-2", len("main-2")
+	for _, focus := range []FocusArea{FocusName, FocusBase} {
+		m.Focus = focus
+		view := plain(strings.Join(RenderCreate(m, 64, 18), "\n"))
+		if !strings.Contains(view, "Branch  [main-2]") {
+			t.Errorf("focus %v leaves cursor padding inside the name: %s", focus, view)
+		}
+	}
+}
+
+func TestCreateBasePickerIsCompact(t *testing.T) {
+	m := createSample()
+	m.Candidates[0].Label = "main"
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyTab})
+	closed := plain(strings.Join(RenderCreate(m, 64, 18), "\n"))
+	if !strings.Contains(closed, "Base    [main ▾]") {
+		t.Errorf("closed Base must fit its label: %s", closed)
+	}
+	for i := 0; i < 10; i++ {
+		label := "feature/task-" + strconv.Itoa(i)
+		m.Candidates = append(m.Candidates, Candidate{Label: label, Ref: "refs/heads/" + label, Kind: CandidateLocal, Status: "up to date"})
+	}
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyEnter})
+	view := plain(strings.Join(RenderCreate(m, 64, 24), "\n"))
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "Search") && !strings.Contains(line, "Base") {
+			t.Errorf("search must share the Base menu header: %s", line)
+		}
+		if start := strings.Index(line, "┌"); start >= 0 && !strings.Contains(line, "New worktree") {
+			end := strings.LastIndex(line, "┐")
+			if end >= 0 && tui.Width(line[start:end+len("┐")]) > 38 {
+				t.Errorf("Base menu exceeds 38 cells: %s", line)
+			}
+		}
+	}
+	if strings.Count(view, "feature/task-") > 2 {
+		t.Errorf("menu should show at most four candidates: %s", view)
+	}
+	if !strings.Contains(view, "current · ↓3 behind") || strings.Contains(view, "upstream · fetching") {
+		t.Errorf("only highlighted candidate details should appear: %s", view)
+	}
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyDown})
+	view = plain(strings.Join(RenderCreate(m, 64, 18), "\n"))
+	if !strings.Contains(view, "upstream · fetching…") || strings.Contains(view, "current · ↓3 behind") || m.Selected != 0 {
+		t.Errorf("details must follow the highlight without committing the base: %s", view)
+	}
+}
+
+func TestCreateCompactPickerPreservesBranchSuffix(t *testing.T) {
+	m := createSample()
+	for _, suffix := range []string{"first", "second"} {
+		label := "feature/" + strings.Repeat("긴이름/", 10) + suffix
+		m.Candidates = append(m.Candidates, Candidate{Label: label, Ref: "refs/heads/" + label, Kind: CandidateLocal})
+	}
+	keys, _ := tui.ParseKeys([]byte("\t\r긴이름"))
+	for _, k := range keys {
+		m, _ = UpdateCreate(m, k)
+	}
+	view := plain(strings.Join(RenderCreate(m, 64, 18), "\n"))
+	for _, want := range []string{"feature/", "…", "first", "second"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("long candidates lose their identity %q: %s", want, view)
+		}
+	}
+	for _, line := range RenderCreate(m, 32, 12) {
+		if tui.Width(line) > 32 {
+			t.Fatalf("compact Unicode label overflows: %s", line)
+		}
+	}
+}
+
+func TestCreateSearchSelectsFromThousandBranches(t *testing.T) {
+	m := createSample()
+	for i := 0; i < 1200; i++ {
+		label := "feature/task-" + strconv.Itoa(i)
+		m.Candidates = append(m.Candidates, Candidate{Label: label, Ref: "refs/heads/" + label, Kind: CandidateLocal, Status: "up to date"})
+	}
+	keys, _ := tui.ParseKeys([]byte("\t\rTASK-119"))
+	for _, k := range keys {
+		m, _ = UpdateCreate(m, k)
+	}
+	view := plain(strings.Join(RenderCreate(m, 64, 18), "\n"))
+	for _, want := range []string{"Base    ┌ / TASK-119", "1/11", "1202", "feature/task-119"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("search missing %q: %s", want, view)
+		}
+	}
+	if strings.Contains(view, "feature/task-118") || m.Selected != 0 || m.Name != "widget-studio/dev-2" {
+		t.Fatalf("search must only narrow uncommitted choices: %s", view)
+	}
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyDown})
+	m, action := UpdateCreate(m, tui.Key{Kind: tui.KeyEnter})
+	if action != CreateNone || m.MenuOpen || m.Name != "feature/task-1190" || m.Candidates[m.Selected].Ref != "refs/heads/feature/task-1190" {
+		t.Fatalf("selected wrong filtered branch: name=%q selected=%d action=%v", m.Name, m.Selected, action)
+	}
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyTab})
+	if _, action := UpdateCreate(m, tui.Key{Kind: tui.KeyEnter}); action != CreateSubmit {
+		t.Fatal("filtered base must be usable for creation")
+	}
+}
+
+func TestCreateSearchHighlightsMatches(t *testing.T) {
+	for _, tc := range []struct {
+		name, label, query string
+		matches            []string
+	}{
+		{"case insensitive", "feature/Task-task", "TASK", []string{"Task", "task"}},
+		{"Korean", "feature/한글-한글", "한글", []string{"한글", "한글"}},
+		{"case conversion changes byte width", "feature/KELVIN", "kel", []string{"KEL"}},
+		{"overlapping matches", "feature/banana", "ana", []string{"anana"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := createSample()
+			m.Candidates = []Candidate{
+				{Label: tc.label, Ref: "refs/heads/first", Kind: CandidateLocal},
+				{Label: tc.label + "-2", Ref: "refs/heads/second", Kind: CandidateLocal},
+			}
+			keys, _ := tui.ParseKeys([]byte("\t\r" + tc.query))
+			for _, k := range keys {
+				m, _ = UpdateCreate(m, k)
+			}
+			view := strings.Join(RenderCreate(m, 64, 18), "\n")
+			counts := map[string]int{}
+			for _, match := range tc.matches {
+				counts[match] += 2 // Both the selected and the unselected candidate contain it.
+			}
+			for match, want := range counts {
+				if got := strings.Count(view, tui.Bold(tui.Fg(match, tui.Cyan))); got != want {
+					t.Errorf("match emphasis for %q: got %d, want %d in %s", match, got, want, view)
+				}
+			}
+			for _, line := range strings.Split(view, "\n") {
+				if !strings.Contains(plain(line), tc.label) {
+					continue
+				}
+				if !strings.Contains(line, "\x1b[36m") {
+					t.Errorf("selected and unselected candidates must both emphasize matches: %s", line)
+				}
+				if strings.Contains(plain(line), "▸") && !strings.Contains(line, "\x1b[7m▸") {
+					t.Errorf("match emphasis must preserve row selection: %s", line)
+				}
+			}
+			m.MenuQuery = ""
+			if strings.Contains(strings.Join(RenderCreate(m, 64, 18), "\n"), "\x1b[36m") {
+				t.Fatal("empty query must not emphasize labels")
+			}
+		})
+	}
+}
+
+func TestCreateSearchHighlightSurvivesEllipsis(t *testing.T) {
+	m := createSample()
+	label := strings.Repeat("x", 14) + "NEEDLE" + strings.Repeat("y", 20) + "needle-tail"
+	m.Candidates = []Candidate{{Label: label, Ref: "refs/heads/long", Kind: CandidateLocal}}
+	keys, _ := tui.ParseKeys([]byte("\t\rneedle"))
+	for _, k := range keys {
+		m, _ = UpdateCreate(m, k)
+	}
+	view := strings.Join(RenderCreate(m, 64, 18), "\n")
+	for _, want := range []string{tui.Bold(tui.Fg("NE", tui.Cyan)) + "…", tui.Bold(tui.Fg("needle", tui.Cyan)) + "-tail"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("visible part of original match must remain emphasized: %q in %s", want, view)
+		}
+	}
+	for _, cols := range []int{20, 32, 62, 64} {
+		for _, line := range RenderCreate(m, cols, 16) {
+			if tui.Width(line) > cols || !utf8.ValidString(line) {
+				t.Fatalf("highlight corrupts width or UTF-8 at %d columns: %q", cols, line)
+			}
+		}
+	}
+}
+
+func TestCreateCursorBoundsAndUnicode(t *testing.T) {
+	for _, tc := range []struct{ name, input, want, caret string }{
+		{"left boundary", strings.Repeat("\x1b[D", 30) + "\x7fX", "Xwidget-studio/dev-2", "w"},
+		{"right boundary", strings.Repeat("\x1b[C", 30) + "X", "widget-studio/dev-2X", "]"},
+		{"unicode deletion", "한글\x1b[D\x7f", "widget-studio/dev-2글", "글"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := createSample()
+			keys, _ := tui.ParseKeys([]byte(tc.input))
+			for _, k := range keys {
+				m, _ = UpdateCreate(m, k)
+			}
+			if m.Name != tc.want || !strings.Contains(strings.Join(RenderCreate(m, 64, 18), "\n"), tui.Reverse(tc.caret)) {
+				t.Fatalf("name/cursor after %s: %q", tc.name, m.Name)
+			}
+		})
+	}
+}
+
+func TestCreateSearchNoMatchesRecoveryAndCancel(t *testing.T) {
+	m := createSample()
+	m.Candidates = append(m.Candidates, Candidate{Label: "feature/한글", Ref: "refs/heads/feature/한글", Kind: CandidateLocal, Status: "up to date"})
+	keys, _ := tui.ParseKeys([]byte("\t\r한글X\x1b[B\x1b[A\r"))
+	for _, k := range keys {
+		var action CreateAction
+		m, action = UpdateCreate(m, k)
+		if action != CreateNone {
+			t.Fatalf("empty search must not submit or cancel: %v", action)
+		}
+	}
+	// A background fetch must not close an empty search or choose a hidden row.
+	m = m.autoName()
+	view := plain(strings.Join(RenderCreate(m, 64, 18), "\n"))
+	if !m.MenuOpen || m.Selected != 0 || m.Name != "widget-studio/dev-2" || !strings.Contains(view, "No matching branches") || !strings.Contains(view, "0/0") {
+		t.Fatalf("empty search: %s", view)
+	}
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyBackspace})
+	view = plain(strings.Join(RenderCreate(m, 64, 18), "\n"))
+	if !strings.Contains(view, "feature/한글") || !strings.Contains(view, "1/1") {
+		t.Fatalf("Backspace must restore matches: %s", view)
+	}
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyBackspace})
+	view = plain(strings.Join(RenderCreate(m, 64, 18), "\n"))
+	if !strings.Contains(view, "Base    ┌ / 한 ") || strings.Contains(view, "/ 한글") {
+		t.Fatalf("search Backspace must remove a whole Unicode character: %s", view)
+	}
+	m, action := UpdateCreate(m, tui.Key{Kind: tui.KeyEsc})
+	if action != CreateNone || m.MenuOpen || m.Selected != 0 {
+		t.Fatalf("Esc must discard search only: %+v", m)
+	}
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyEnter})
+	view = plain(strings.Join(RenderCreate(m, 64, 18), "\n"))
+	if !strings.Contains(view, "1/3") || !strings.Contains(view, "team/upstream/main") {
+		t.Fatalf("reopening must restore all candidates: %s", view)
+	}
+}
+
+func TestCreateSearchKeepsRefAcrossAsyncInsertion(t *testing.T) {
+	m := createSample()
+	keys, _ := tui.ParseKeys([]byte("\x1b[D\t\rMAIN"))
+	for _, k := range keys {
+		m, _ = UpdateCreate(m, k)
+	}
+	chosen := m.Candidates[1]
+	m.Candidates = []Candidate{m.Candidates[0], {Label: "main", Ref: "refs/heads/main", Kind: CandidateLocal, Status: "up to date"}, chosen}
+	m = m.autoName()
+	view := plain(strings.Join(RenderCreate(m, 64, 18), "\n"))
+	if !m.MenuOpen || !strings.Contains(view, "2/2") || m.NameCursor != len("widget-studio/dev-") || m.UserEdited {
+		t.Fatalf("async insertion changed search or cursor: %s cursor=%d", view, m.NameCursor)
+	}
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyEnter})
+	if m.Candidates[m.Selected].Ref != chosen.Ref || m.Name != "main-2" {
+		t.Fatalf("async insertion changed selected base: %+v", m)
+	}
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyTab})
+	m, _ = UpdateCreate(m, key('X'))
+	if m.Name != "main-2X" {
+		t.Fatalf("new automatic name must start with cursor at end: %q", m.Name)
+	}
+}
+
+func TestRenderCreateKeepsMovingCursorVisible(t *testing.T) {
+	m := createSample()
+	m.Name = strings.Repeat("긴이름/", 20) + "tail-2"
+	m.NameCursor = utf8.RuneCountInString(m.Name)
+	for i := 0; i <= utf8.RuneCountInString(m.Name); i++ {
+		for _, cols := range []int{20, 32, 62, 64} {
+			lines := RenderCreate(m, cols, 16)
+			caret := "]"
+			if m.NameCursor < utf8.RuneCountInString(m.Name) {
+				caret = string([]rune(m.Name)[m.NameCursor])
+			}
+			if !strings.Contains(strings.Join(lines, "\n"), tui.Reverse(caret)) {
+				t.Fatalf("cursor hidden at %d columns, position %d", cols, m.NameCursor)
+			}
+			for _, line := range lines {
+				if tui.Width(line) > cols {
+					t.Fatalf("cursor scroll overflows %d columns: %s", cols, line)
+				}
+			}
+		}
+		m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyLeft})
 	}
 }
 
@@ -216,8 +513,8 @@ func TestRenderCreate(t *testing.T) {
 	if strings.Contains(plain(all), "team/upstream/main") {
 		t.Fatal("collapsed Base must not show other candidates")
 	}
-	if !strings.Contains(all, m.Name+tui.Reverse(" ")) || strings.Contains(all, tui.Reverse(m.Name)) {
-		t.Fatal("only the cursor after the name must be reversed")
+	if !strings.Contains(all, m.Name+tui.Reverse("]")) || strings.Contains(all, tui.Reverse(m.Name)) {
+		t.Fatal("end cursor must use the closing bracket without an extra space")
 	}
 	for _, line := range lines {
 		if tui.Width(line) > 80 {
@@ -229,6 +526,78 @@ func TestRenderCreate(t *testing.T) {
 			if tui.Width(line) > size[0] {
 				t.Fatalf("small overflow %v: %q", size, line)
 			}
+		}
+	}
+}
+
+func TestRenderCreateShowsCompleteCreationWarning(t *testing.T) {
+	m := createSample()
+	m.Message = "cannot protect the selected base: a previous creation of this branch has not completed; choose another name"
+	for _, size := range [][2]int{{64, 18}, {62, 16}} {
+		view := plain(strings.Join(RenderCreate(m, size[0], size[1]), "\n"))
+		for _, want := range []string{"cannot protect the selected base:", "has not completed;", "choose another name", "Enter create", "Esc cancel"} {
+			if !strings.Contains(view, want) {
+				t.Fatalf("warning clipped at %v, missing %q:\n%s", size, want, view)
+			}
+		}
+	}
+}
+
+func TestCreateCanReadLongMessageAndReturnWithoutSubmitting(t *testing.T) {
+	m := createSample()
+	m.Cols, m.Rows = 32, 12
+	m.Message = "creation failed:\n" + strings.Repeat("long diagnostic with 한글 ", 25) + "\nchoose another name"
+	view := plain(strings.Join(RenderCreate(m, m.Cols, m.Rows), "\n"))
+	if !strings.Contains(view, "F1") {
+		t.Fatalf("overflow must offer full details: %s", view)
+	}
+	m, action := UpdateCreate(m, tui.Key{Kind: tui.KeyF1})
+	if action != CreateNone || !m.MessageOpen {
+		t.Fatal("F1 must open the complete message")
+	}
+	for i := 0; i < 100; i++ {
+		m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyDown})
+	}
+	view = plain(strings.Join(RenderCreate(m, m.Cols, m.Rows), "\n"))
+	if !strings.Contains(view, "choose another name") || !strings.Contains(view, "Enter/Esc back") {
+		t.Fatalf("cannot read recovery instruction: %s", view)
+	}
+	m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyUp})
+	up := plain(strings.Join(RenderCreate(m, m.Cols, m.Rows), "\n"))
+	if view == up {
+		t.Fatal("scrolling up must respond immediately even after reaching the end")
+	}
+	for _, k := range []tui.KeyKind{tui.KeyEnter, tui.KeyEsc, tui.KeyF1} {
+		closed, action := UpdateCreate(m, tui.Key{Kind: k})
+		if action != CreateNone || closed.MessageOpen || closed.Name != m.Name || closed.Selected != m.Selected || closed.Message != m.Message {
+			t.Fatalf("closing details must preserve form and never submit/cancel: %+v %v", closed, action)
+		}
+	}
+	if _, action := UpdateCreate(m, tui.Key{Kind: tui.KeyCtrlC}); action != CreateCancel {
+		t.Fatal("Ctrl-C must still cancel")
+	}
+}
+
+func TestRenderCreateMessageWidthsAndHardBreaks(t *testing.T) {
+	m := createSample()
+	m.MessageOpen = true
+	m.Message = strings.Repeat("긴경로/", 40) + "\nchoose another name\n\x1b[31mfailed\x1b[0m"
+	for _, size := range [][2]int{{64, 18}, {62, 16}, {32, 12}, {20, 8}} {
+		m.Cols, m.Rows = size[0], size[1]
+		m.MessageOffset = 0
+		var seen string
+		for i := 0; i < 150; i++ {
+			lines := RenderCreate(m, size[0], size[1])
+			for _, line := range lines {
+				if tui.Width(line) > size[0] {
+					t.Fatalf("message overflows %v: %q", size, line)
+				}
+			}
+			seen += plain(strings.Join(lines, "\n"))
+			m, _ = UpdateCreate(m, tui.Key{Kind: tui.KeyDown})
+		}
+		if !strings.Contains(seen, "choose another") || !strings.Contains(seen, "name") || !strings.Contains(seen, "failed") {
+			t.Fatalf("message content lost at %v", size)
 		}
 	}
 }
@@ -260,7 +629,7 @@ func TestRenderCreateDropdownAndViewport(t *testing.T) {
 		}
 	}
 	open := plain(strings.Join(RenderCreate(m, 62, 16), "\n"))
-	for _, want := range []string{"Enter select", "Esc close", "▴", "▸", "fetching…", "14/14"} {
+	for _, want := range []string{"Enter select", "Esc close", "Search branches", "▸", "fetching…", "14/14"} {
 		if !strings.Contains(open, want) {
 			t.Fatalf("missing %q: %s", want, open)
 		}
@@ -276,10 +645,11 @@ func TestRenderCreateDropdownAndViewport(t *testing.T) {
 func TestRenderCreateKeepsEndCursorVisible(t *testing.T) {
 	m := createSample()
 	m.Name = strings.Repeat("긴이름/", 20) + "tail-2"
+	m.NameCursor = utf8.RuneCountInString(m.Name)
 	for _, cols := range []int{32, 62, 64} {
 		lines := RenderCreate(m, cols, 16)
 		all := strings.Join(lines, "\n")
-		if !strings.Contains(all, "tail-2"+tui.Reverse(" ")+"]") {
+		if !strings.Contains(all, "tail-2"+tui.Reverse("]")) {
 			t.Fatalf("end cursor is not visible at %d columns: %s", cols, all)
 		}
 		for _, line := range lines {

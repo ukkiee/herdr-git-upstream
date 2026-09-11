@@ -30,6 +30,10 @@ teammate's push can appear in your sidebar without a manual fetch.
 Periodic refresh only fetches refs. Automatic freshening uses `--ff-only` when its checks pass and can
 be disabled. Worktree removal is an explicit action, never forced, and leaves branches in place.
 
+After a local `git pull`, commit, or branch switch, sidebar tokens update without waiting for the next
+fetch. The daemon checks Git reference metadata once a second and recalculates only changed
+repositories/checkouts. Idle checks run no Git commands or network requests.
+
 ## How do I install it?
 
 Requires **herdr 0.7.5+**, **Go 1.24+**, and **Git 2.31+**. Use Git 2.38+ for conflict checks and
@@ -130,18 +134,25 @@ target and safety assessment. See [assessment and removal rules](docs/REFERENCE.
 herdr plugin action invoke new-worktree --plugin git-upstream
 ```
 
-1. Edit the suggested branch name. The cursor starts at the end; typing appends and `Backspace` removes one character.
+1. Edit the suggested branch name. Use `←` / `→` to move the cursor; typing inserts there and `Backspace` removes the preceding character.
 2. Press `Tab` to focus `Base`, then `Enter` to open the dropdown.
-3. Choose a branch with `↑` / `↓`, then confirm it with `Enter`.
+3. Type part of a branch name to search, choose a match with `↑` / `↓`, then confirm it with `Enter`.
 4. Press `Tab` to return to the name field, then `Enter` to create.
 
 The menu shows the current branch, upstream, remote default, and configured integration branches first,
 followed by all local and known remote-tracking branches. It shows the current position and total count.
+Search ignores case and shows the match count; use `Backspace` to edit the query. Closing the menu clears it.
+Search is built into the compact menu, which shows up to four branches at a time. The highlighted
+branch's type and fetch status appear below the list; use the arrow keys to browse more results.
+Matching text appears in bold cyan, including in the selected row.
 Remote branches are those known locally, not a live list of every branch on the server.
 
 The selected remote base is fetched before creation. `Esc` closes the dropdown first, then cancels the
 popup. Creation requires a running herdr server. See [creation details](docs/REFERENCE.md#creation-popup)
 for path selection, existing branch names, and upstream handling.
+
+Warnings wrap across lines. Press `F1` to read the full message, use `↑` / `↓` to scroll, and press
+`Enter` or `Esc` to return to your input.
 
 ### Keyboard shortcuts
 

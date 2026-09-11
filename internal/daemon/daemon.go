@@ -71,6 +71,12 @@ func Run(ctx context.Context, log *slog.Logger) error {
 	defer cancel()
 	var lockLost, stopped atomic.Bool
 	go keepLockFresh(ctx, store, cancel, &lockLost, &stopped)
+	localDone := make(chan struct{})
+	go func() {
+		defer close(localDone)
+		syncer.watchLocal(ctx)
+	}()
+	defer func() { cancel(); <-localDone }()
 
 	// 첫 회차를 바로 돈다. 데몬이 뜨자마자 사이드바가 채워져야, 사용자가 설정이 먹었는지 알 수 있다.
 	sweep(ctx, syncer, log, "", false)
@@ -100,8 +106,10 @@ func Run(ctx context.Context, log *slog.Logger) error {
 			// 사용자가 herdr를 재시작하지 않고도 주기를 바꿀 수 있게 하는 값어치가 있다.
 			if reloaded, err := config.Load(); err == nil {
 				cfg = reloaded
+				syncer.localMu.Lock()
 				syncer.Config = reloaded
 				syncer.Git.Timeout = reloaded.FetchTimeout
+				syncer.localMu.Unlock()
 			}
 
 			if hint, ok := takeWake(store); ok {

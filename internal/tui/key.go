@@ -26,6 +26,7 @@ const (
 	KeyCtrlC
 	// KeyResize는 창 크기가 바뀌었다는 뜻이다. 키가 아니지만 같은 채널로 오면 화면 루프가 하나로 끝난다.
 	KeyResize
+	KeyF1
 )
 
 // Key는 사용자가 누른 키 하나다.
@@ -39,7 +40,7 @@ type Key struct {
 // 아직 끝나지 않은 조각(ESC 시퀀스의 앞부분, UTF-8 의 앞 바이트)은 rest 로 돌려주어 다음 읽기와 이어
 // 붙이게 한다. ESC 하나만 있고 뒤에 아무것도 없으면 단독 ESC 키다. 터미널은 화살표 같은 시퀀스를 한 번에
 // 쓰므로, ESC 가 혼자 읽혔다는 것은 사람이 ESC 를 눌렀다는 뜻이다. ESC 뒤에 `[` 나 `O` 가 아닌 바이트가
-// 오면 Alt 를 누른 채 친 글자로 보고 ESC 는 버린다. 모르는 시퀀스(Home, F1 같은 것)와 다루지 않는
+// 오면 Alt 를 누른 채 친 글자로 보고 ESC 는 버린다. 모르는 시퀀스(Home, F2 같은 것)와 다루지 않는
 // 제어 문자는 버린다. 화면이 쓰지 않는 키를 글자로 돌려주면 엉뚱한 자리에 찍힌다.
 func ParseKeys(buf []byte) (keys []Key, rest []byte) {
 	for i := 0; i < len(buf); {
@@ -108,7 +109,8 @@ func ParseKeys(buf []byte) (keys []Key, rest []byte) {
 // CSI(`ESC [`)는 매개변수 바이트(0x30–0x3f)와 중간 바이트(0x20–0x2f)가 이어지다 종결 바이트(0x40–0x7e)로
 // 끝난다. 종결 바이트가 아직 없으면 끝나지 않은 것이다. SS3(`ESC O`)는 종결 바이트 하나가 바로 온다.
 // 어느 쪽이든 종결 바이트가 A/B/C/D 면 화살표다. `ESC [ 1 ; 5 A` 처럼 수식 키가 붙은 화살표도 매개변수만
-// 다르므로 같은 화살표로 읽는다. 그 밖의 시퀀스는 KeyRune 으로 표시해 호출자가 버리게 한다.
+// 다르므로 같은 화살표로 읽는다. F1은 SS3/CSI의 P 또는 CSI 11~로 읽는다.
+// 그 밖의 시퀀스는 KeyRune 으로 표시해 호출자가 버리게 한다.
 // 시퀀스 안에 올 수 없는 바이트를 만나면 거기서 끊고, 그 바이트는 소비하지 않는다.
 func parseEscape(seq []byte) (key Key, n int, complete bool) {
 	if seq[1] == 'O' {
@@ -121,6 +123,9 @@ func parseEscape(seq []byte) (key Key, n int, complete bool) {
 		c := seq[j]
 		switch {
 		case c >= 0x40 && c <= 0x7e:
+			if string(seq[2:j+1]) == "11~" {
+				return Key{Kind: KeyF1}, j + 1, true
+			}
 			return arrowKey(c), j + 1, true
 		case c >= 0x20 && c <= 0x3f:
 			continue
@@ -141,6 +146,8 @@ func arrowKey(final byte) Key {
 		return Key{Kind: KeyRight}
 	case 'D':
 		return Key{Kind: KeyLeft}
+	case 'P':
+		return Key{Kind: KeyF1}
 	default:
 		return Key{}
 	}
