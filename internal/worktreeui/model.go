@@ -78,6 +78,8 @@ type Model struct {
 	RepoName string
 	// Rows는 정렬된 행들이다. 정렬은 컨트롤러가 SortRows 로 한다.
 	Rows []Row
+	// Assessing marks the initial inventory while its deletion verdicts are still unknown.
+	Assessing bool
 	// Cursor는 선택된 행의 자리다. Rows 가 비어 있으면 뜻이 없다.
 	Cursor int
 	Fetch  FetchState
@@ -94,6 +96,9 @@ type Model struct {
 
 // SafeRows는 safe 판정인 행들이다. D 가 지울 대상이다.
 func (m Model) SafeRows() []Row {
+	if m.Assessing {
+		return nil
+	}
 	var rows []Row
 	for _, row := range m.Rows {
 		if row.Verdict == judge.Safe {
@@ -253,6 +258,10 @@ func clampCursor(m Model) Model {
 }
 
 func removeSelected(m Model) (Model, Action) {
+	if m.Assessing {
+		m.Message = "checking worktree status; try again when ready"
+		return m, ActionNone
+	}
 	row, ok := m.Selected()
 	if !ok {
 		m.Message = "no worktree selected"
@@ -266,6 +275,10 @@ func removeSelected(m Model) (Model, Action) {
 }
 
 func removeAllSafe(m Model) (Model, Action) {
+	if m.Assessing {
+		m.Message = "checking worktree status; try again when ready"
+		return m, ActionNone
+	}
 	count := len(m.SafeRows())
 	if count == 0 {
 		m.Message = "no safe worktrees to remove"
@@ -380,7 +393,7 @@ func list(m Model, cols, height int) []string {
 		offset = m.Cursor - height + 1
 	}
 	for i := offset; i < len(m.Rows) && len(lines) < height; i++ {
-		line := rowLine(m.Rows[i], labelWidth)
+		line := rowLine(m.Rows[i], labelWidth, m.Assessing)
 		if i == m.Cursor {
 			line = tui.Reverse(padRight(line, cols))
 		}
@@ -393,8 +406,11 @@ func list(m Model, cols, height int) []string {
 }
 
 // rowLine은 행 하나다. 판정 열(고정 폭, 색), 이름 열(맞춘 폭), 설명 열.
-func rowLine(row Row, labelWidth int) string {
+func rowLine(row Row, labelWidth int, assessing bool) string {
 	verdict := padRight(row.Verdict.String(), verdictWidth)
+	if assessing {
+		verdict = padRight("pending", verdictWidth)
+	}
 	switch row.Verdict {
 	case judge.Safe:
 		verdict = tui.Fg(verdict, tui.Green)

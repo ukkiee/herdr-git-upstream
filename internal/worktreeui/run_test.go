@@ -159,10 +159,10 @@ func (h *harness) finished(t *testing.T) error {
 	}
 }
 
-func hasRows(m Model) bool { return len(m.Rows) > 0 }
+func hasRows(m Model) bool { return len(m.Rows) > 0 && !m.Assessing }
 
 func hasLabel(label string) func(Model) bool {
-	return func(m Model) bool { _, ok := byLabel(m.Rows)[label]; return ok }
+	return func(m Model) bool { _, ok := byLabel(m.Rows)[label]; return ok && !m.Assessing }
 }
 
 func lacksLabel(label string) func(Model) bool {
@@ -199,13 +199,18 @@ func TestLoopRemovesSelectedThroughHerdr(t *testing.T) {
 	expectRow(t, m.Rows, "done", "safe", "merged")
 	expectRow(t, m.Rows, "gone", "safe", "gone")
 	expectRow(t, m.Rows, "main", "blocked", "main checkout")
-	if m.Cursor != 0 || m.Rows[0].Branch != "done" || m.FetchedAgo == "" {
-		t.Fatalf("커서는 첫 safe 행에, fetch 시각이 있어야 한다: %+v", m)
+	selected, ok := m.Selected()
+	if !ok || canonical(selected.Path) != canonical(dirty) || m.Rows[0].Branch != "done" || m.FetchedAgo == "" {
+		t.Fatalf("초기 선택과 safe 우선 정렬을 유지하고 fetch 시각이 있어야 한다: %+v", m)
 	}
 	if !strings.Contains(h.out.String(), "\x1b[1;1H") {
 		t.Fatal("화면은 Frame 으로 그려야 한다")
 	}
 
+	for range m.Cursor {
+		h.press(t, key('k'))
+	}
+	h.waitFor(t, "done 선택", func(m Model) bool { row, ok := m.Selected(); return ok && canonical(row.Path) == canonical(done) })
 	h.press(t, key('d'))
 	m = h.waitFor(t, "done 이 사라진 표", lacksLabel("done"))
 	if _, err := os.Stat(done); !os.IsNotExist(err) {
@@ -578,6 +583,90 @@ type heldRefreshHerdr struct {
 	calls   atomic.Int32
 	entered chan struct{}
 	release chan struct{}
+}
+
+type heldInitialGatherHerdr struct {
+	*fakeHerdr
+	calls   atomic.Int32
+	release chan struct{}
+}
+
+func (h *heldInitialGatherHerdr) WorktreeList(ctx context.Context, id, cwd string) (herdrcli.WorktreeListResult, error) {
+	if h.calls.Add(1) == 2 {
+		select {
+		case <-h.release:
+		case <-ctx.Done():
+			return herdrcli.WorktreeListResult{}, ctx.Err()
+		}
+	}
+	return h.fakeHerdr.WorktreeList(ctx, id, cwd)
+}
+
+func TestLoopShowsInventoryBeforeAssessment(t *testing.T) {
+	f := newFixture(t)
+	f.addWorktree(t, "a-work")
+	f.addWorktree(t, "z-work")
+	herdr := &heldInitialGatherHerdr{fakeHerdr: newFakeHerdr(f), release: make(chan struct{})}
+	_, h := start(t, f, herdr, f.work)
+	var first Model
+	select {
+	case first = <-h.models:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first frame did not arrive")
+	}
+	if len(first.Rows) != 3 {
+		t.Fatalf("first frame must show all worktrees before their status is available; got %d", len(first.Rows))
+	}
+	if len(first.SafeRows()) != 0 {
+		t.Fatal("unassessed rows must not be removable")
+	}
+	if _, action := Update(first, key('d')); action != ActionNone {
+		t.Fatal("pending selected row can be removed")
+	}
+	if _, action := Update(first, key('D')); action != ActionNone {
+		t.Fatal("pending rows enter removal confirmation")
+	}
+	h.press(t, key('j'))
+	selected := h.waitFor(t, "pending main selected", func(m Model) bool {
+		row, ok := m.Selected()
+		return ok && row.IsMain
+	})
+	path := selected.Rows[selected.Cursor].Path
+	close(herdr.release)
+	ready := h.waitFor(t, "assessment completed", func(m Model) bool { return len(m.SafeRows()) > 0 })
+	row, _ := ready.Selected()
+	if row.Path != path {
+		t.Fatalf("assessment reordering changed the user's selected worktree: %q -> %q", path, row.Path)
+	}
+	h.press(t, key('q'))
+	if err := h.finished(t); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoopPendingDeleteRetryKeepsTarget(t *testing.T) {
+	f := newFixture(t)
+	f.dirtyWorktree(t, "a-work")
+	f.addWorktree(t, "z-work")
+	herdr := &heldInitialGatherHerdr{fakeHerdr: newFakeHerdr(f), release: make(chan struct{})}
+	_, h := start(t, f, herdr, f.work)
+	first := h.waitFor(t, "pending inventory", func(m Model) bool { return m.Assessing && len(m.Rows) == 3 })
+	before, _ := first.Selected()
+	h.press(t, key('d'))
+	h.waitFor(t, "pending delete refusal", func(m Model) bool { return strings.Contains(m.Message, "try again") })
+	close(herdr.release)
+	ready := h.waitFor(t, "assessment finished", hasRows)
+	after, _ := ready.Selected()
+	if before.Path != after.Path {
+		t.Fatalf("retry after pending delete refusal changes target: %s -> %s", before.Label(), after.Label())
+	}
+	if _, action := Update(ready, key('d')); action != ActionNone {
+		t.Fatal("retry must still target the dirty worktree")
+	}
+	h.press(t, key('q'))
+	if err := h.finished(t); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (h *heldRefreshHerdr) WorktreeList(ctx context.Context, id, cwd string) (herdrcli.WorktreeListResult, error) {

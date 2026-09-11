@@ -226,7 +226,10 @@ a repository working directory and herdr is unavailable, the screen falls back t
 switch workspaces in that mode.
 
 **The screen checks the remote when opened.** The daemon visits only workspaces open in herdr, so it
-does not know the state of every other worktree. The screen first renders local refs, then runs
+does not know the state of every other worktree. The screen shows worktree names immediately with
+`pending` assessments while it checks local state in the background. You can navigate and open a
+worktree during this check; removal stays disabled. The selected worktree remains selected when
+assessments reorder the list. After local checks finish, the screen runs
 `git fetch` for all branches and `git ls-remote --heads` for deleted-branch detection in parallel, one
 remote round trip each, and renders again. **It does not prune.** It does not delete your refs. On this
 screen, `gone` means the branch is absent from the `ls-remote` result; only when that result is

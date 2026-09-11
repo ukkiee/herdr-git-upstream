@@ -109,7 +109,7 @@ func newController(ctx context.Context, opts Options) (*controller, error) {
 		herdr: opts.Herdr,
 		cwd:   inv.Main.Root,
 		main:  inv.Main,
-		m:     Model{RepoName: inv.RepoName, HerdrUnavailable: !inv.HerdrAvailable},
+		m:     Model{RepoName: inv.RepoName, Rows: inventoryRows(inv), Assessing: true, HerdrUnavailable: !inv.HerdrAvailable},
 	}
 	c.deps = deps{
 		Git:    opts.Git,
@@ -118,6 +118,17 @@ func newController(ctx context.Context, opts Options) (*controller, error) {
 		Spawn:  func(fn func()) { go fn() },
 	}
 	return c, nil
+}
+
+// inventoryRows can be displayed and opened before the per-worktree Git checks finish.
+// Their zero-value verdict is blocked; only collect can establish a deletion verdict.
+func inventoryRows(inv inventory) []Row {
+	rows := make([]Row, len(inv.Items))
+	for i, it := range inv.Items {
+		rows[i] = Row{Path: it.Path, Branch: it.Branch, OpenWorkspaceID: it.OpenWorkspaceID, IsMain: it.IsMain}
+	}
+	SortRows(rows)
+	return rows
 }
 
 // gathered는 자료를 모은 결과다.
@@ -298,7 +309,7 @@ func (c *controller) loop(ctx context.Context, keys <-chan tui.Key, out io.Write
 	}
 
 	// 첫 모으기가 끝나기 전에도 화면은 떠 있어야 한다. 그동안 마지막 줄이 무엇을 하는 중인지 말한다.
-	c.m.Message = "collecting…"
+	c.m.Message = "checking worktree status…"
 	draw()
 	startGather()
 	firstGather := true
@@ -316,7 +327,17 @@ func (c *controller) loop(ctx context.Context, keys <-chan tui.Key, out io.Write
 			if got.err != nil {
 				c.m.Message = got.err.Error()
 			} else {
+				selected, hadSelection := c.m.Selected()
 				c.m.Rows = got.rows
+				c.m.Assessing = false
+				if hadSelection {
+					for i, row := range got.rows {
+						if row.Path == selected.Path {
+							c.m.Cursor = i
+							break
+						}
+					}
+				}
 				c.m.HerdrUnavailable = got.herdrUnavailable
 				c.lookupRemotes = got.lookupRemotes
 				c.m = clampCursor(c.m)
