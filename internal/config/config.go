@@ -34,7 +34,7 @@ type Config struct {
 	// FetchTimeoutSeconds는 저장소 하나당 fetch 제한 시간이다.
 	FetchTimeoutSeconds int `json:"fetch_timeout_seconds,omitempty"`
 
-	// StaleAfterSeconds는 fetch 실패가 이 시간 넘게 이어질 때 stale 토큰을 띄우는 기준이다.
+	// StaleAfterSeconds는 이전 설정과의 호환용이며 사이드바 경고를 표시하지 않는다.
 	StaleAfterSeconds int `json:"stale_after_seconds,omitempty"`
 
 	// BehindToken과 AheadToken은 사이드바에 보고할 토큰 이름이다. 빈 문자열이면 그 토큰을 보고하지 않는다.
@@ -46,18 +46,17 @@ type Config struct {
 	BehindPrefix *string `json:"behind_prefix,omitempty"`
 	AheadPrefix  *string `json:"ahead_prefix,omitempty"`
 
-	// StaleLabel은 stale 토큰의 값이다.
+	// 상태 문구의 토큰 이름은 이전 값을 지우는 데만 쓰고 라벨은 표시하지 않는다.
 	StaleLabel *string `json:"stale_label,omitempty"`
 
-	// GoneToken과 MergedToken은 브랜치가 원격에서 끝난 작업인지 알리는 토큰 이름이고,
-	// GoneLabel과 MergedLabel은 해당할 때 채우는 값이다.
-	GoneToken   *string `json:"gone_token,omitempty"`
-	GoneLabel   *string `json:"gone_label,omitempty"`
+	// GoneToken과 GoneLabel은 이전 설정과의 호환용이다.
+	GoneToken *string `json:"gone_token,omitempty"`
+	GoneLabel *string `json:"gone_label,omitempty"`
+	// MergedToken은 이전 버전의 사이드바 값을 지우는 데만 쓴다. MergedLabel은 호환용으로 읽지만 표시하지 않는다.
 	MergedToken *string `json:"merged_token,omitempty"`
 	MergedLabel *string `json:"merged_label,omitempty"`
 
-	// CatchupToken은 따라잡을 때 충돌하는지 미리 알리는 토큰 이름이고,
-	// CatchupConflictLabel은 충돌할 때만 채우는 값이다. 깨끗하면 빈 값이다.
+	// CatchupToken과 CatchupConflictLabel은 이전 설정과의 호환용이다.
 	CatchupToken         *string `json:"catchup_token,omitempty"`
 	CatchupConflictLabel *string `json:"catchup_conflict_label,omitempty"`
 
@@ -78,8 +77,7 @@ type Resolved struct {
 	BehindPrefix string
 	AheadPrefix  string
 	StaleLabel   string
-	// GoneToken과 MergedToken은 브랜치가 원격에서 끝난 작업인지, CatchupToken은 따라잡을 때
-	// 충돌하는지 알리는 토큰이다. 판정 규칙은 internal/judge에 있다.
+	// 상태 문구 토큰은 기존 값을 지우는 데만 쓰며 라벨은 표시하지 않는다.
 	GoneToken            string
 	GoneLabel            string
 	MergedToken          string
@@ -165,8 +163,8 @@ func (r Resolved) InvalidTokenNames() []string {
 }
 
 // TokenNames는 보고할 수 있는 토큰 이름의 집합이다. 빈 이름(보고하지 않음)과 규칙에 어긋나 버린
-// 이름은 이미 빠져 있다. status와 setup이 "우리 토큰이 하나라도 설정에 있는가"를 물을 때 쓴다.
-// 사이드바 행의 순서와 모양은 여기가 아니라 setup이 한 곳에서 정한다.
+// 이름은 이미 빠져 있다. 기존 값을 지울 상태 문구 토큰도 포함한다.
+// 실제로 표시할 토큰과 사이드바 행의 순서·모양은 setup이 정한다.
 func (r Resolved) TokenNames() []string {
 	var names []string
 	for _, name := range []string{

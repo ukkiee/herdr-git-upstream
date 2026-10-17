@@ -13,8 +13,8 @@ teammate's push can appear in your sidebar without a manual fetch.
 
 ```text
 ● app                main                ↓3
-  · fix-checkout     fix/checkout        ↓3 ↑1 conflict
-  · add-search       feat/search         gone merged
+  · fix-checkout     fix/checkout        ↓3 ↑1
+  · add-search       feat/search
 ```
 
 ## What does it do?
@@ -22,7 +22,7 @@ teammate's push can appear in your sidebar without a manual fetch.
 | Feature | What you get |
 | --- | --- |
 | Background refresh | Periodic fetches for repositories open in herdr |
-| Sidebar signals | Ahead/behind counts, disappeared upstreams, content already present remotely, and catch-up conflicts |
+| Sidebar signals | Ahead/behind commit counts |
 | Worktree screen | All worktrees in the repository, with assessments and removal of eligible worktrees |
 | Creation popup | A base-branch dropdown and an editable name for a new worktree |
 | Automatic freshening | A guarded fast-forward of a newly created worktree when its base is behind the remote |
@@ -62,10 +62,6 @@ rows = [
     "branch",
     { token = "$behind", fg = "#f38ba8", bold = true },
     { token = "$ahead", fg = "#a6e3a1" },
-    { token = "$gone", fg = "#6c7086" },
-    { token = "$merged", fg = "#6c7086" },
-    { token = "$catchup", fg = "#fab387", bold = true },
-    { token = "$sync_stale", fg = "#6c7086", dim = true },
   ],
 ]
 ```
@@ -90,14 +86,11 @@ keep it running. Open a Git workspace to see its signals; zero or inapplicable v
 | Display | Meaning |
 | --- | --- |
 | `↓3` / `↑1` | Three commits to receive / one commit to push, compared with the upstream |
-| `gone` | The upstream branch has disappeared from the remote |
-| `merged` | Git checks find HEAD's contents already present in another remote branch |
-| `conflict` | Catching up with the upstream would conflict |
-| `stale` | Fetch failures have continued long enough that the counts may be outdated |
 
-`merged` is an assessment, not proof that a PR was merged. A new branch with no commits of its own can
-also receive it. See [token details](docs/REFERENCE.md#tokens) and
-[assessment limits](docs/REFERENCE.md#how-it-works).
+The sidebar shows the branch and ahead/behind counts only. It does not show `merged`, `gone`, `conflict`,
+or `stale`. Existing status labels are cleared on the next token report after restarting the updated
+plugin daemon. Branch assessments remain available in the worktree screen.
+See [token details](docs/REFERENCE.md#tokens) and [assessment limits](docs/REFERENCE.md#how-it-works).
 
 To refresh immediately:
 

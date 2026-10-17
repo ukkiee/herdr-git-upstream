@@ -13,8 +13,8 @@ herdr는 로컬에 저장된 Git 정보를 읽습니다. 이 플러그인이 fet
 
 ```text
 ● app                main                ↓3
-  · fix-checkout     fix/checkout        ↓3 ↑1 conflict
-  · add-search       feat/search         gone merged
+  · fix-checkout     fix/checkout        ↓3 ↑1
+  · add-search       feat/search
 ```
 
 ## 어떤 역할을 하나요?
@@ -22,7 +22,7 @@ herdr는 로컬에 저장된 Git 정보를 읽습니다. 이 플러그인이 fet
 | 기능 | 할 수 있는 일 |
 | --- | --- |
 | 배경 갱신 | herdr에 열린 저장소의 원격 추적 참조를 주기적으로 fetch |
-| 사이드바 표시 | 뒤처짐·앞섬, 사라진 upstream, 원격에 이미 포함된 내용, 따라잡기 충돌 확인 |
+| 사이드바 표시 | upstream 대비 뒤처짐·앞섬 커밋 수 확인 |
 | worktree 화면 | 저장소의 모든 worktree를 판정과 함께 확인하고 삭제 가능한 항목 정리 |
 | 생성 팝업 | 드롭다운에서 기준 브랜치를 선택하고 이름을 입력해 새 worktree 생성 |
 | 자동 최신화 | 새 worktree의 기준이 원격보다 뒤처졌으면 조건을 확인하고 빨리 감기 |
@@ -62,10 +62,6 @@ rows = [
     "branch",
     { token = "$behind", fg = "#f38ba8", bold = true },
     { token = "$ahead", fg = "#a6e3a1" },
-    { token = "$gone", fg = "#6c7086" },
-    { token = "$merged", fg = "#6c7086" },
-    { token = "$catchup", fg = "#fab387", bold = true },
-    { token = "$sync_stale", fg = "#6c7086", dim = true },
   ],
 ]
 ```
@@ -90,13 +86,11 @@ herdr plugin action invoke start --plugin git-upstream
 | 표시 | 뜻 |
 | --- | --- |
 | `↓3` / `↑1` | upstream과 비교해 받을 커밋 3개 / push할 커밋 1개 |
-| `gone` | upstream 브랜치가 원격에서 사라짐 |
-| `merged` | Git 검사에서 HEAD의 내용이 다른 원격 브랜치에 이미 포함된 것으로 판정 |
-| `conflict` | upstream을 따라잡으면 충돌 |
-| `stale` | fetch 실패가 오래 이어져 숫자가 낡았을 수 있음 |
 
-`merged`는 판정이며 PR 병합 완료를 보증하지 않습니다. 자체 커밋이 없는 새 브랜치에도 표시될 수
-있습니다. [토큰 상세](docs/REFERENCE.ko.md#토큰)와 [판정 한계](docs/REFERENCE.ko.md#동작-방식)를 참고하세요.
+사이드바에는 브랜치 이름과 뒤처짐·앞섬 숫자만 표시합니다. `merged`, `gone`, `conflict`, `stale` 같은
+상태 문구는 표시하지 않습니다. 갱신한 플러그인 데몬을 다시 시작하면 다음 토큰 보고에서 기존 문구를
+지웁니다. 브랜치 판정은 worktree 화면에서 확인할 수 있습니다.
+[토큰 상세](docs/REFERENCE.ko.md#토큰)와 [판정 한계](docs/REFERENCE.ko.md#동작-방식)를 참고하세요.
 
 지금 바로 갱신하려면 실행하세요.
 

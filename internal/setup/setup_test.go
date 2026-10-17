@@ -20,12 +20,8 @@ rows = [
   ["state_icon", "workspace"],
   [
     "branch",
-    { token = "$behind",     fg = "#f38ba8", bold = true },
-    { token = "$ahead",      fg = "#a6e3a1" },
-    { token = "$gone",       fg = "#6c7086" },
-    { token = "$merged",     fg = "#6c7086" },
-    { token = "$catchup",    fg = "#fab387", bold = true },
-    { token = "$sync_stale", fg = "#6c7086", dim = true },
+    { token = "$behind", fg = "#f38ba8", bold = true },
+    { token = "$ahead",  fg = "#a6e3a1" },
   ],
 ]
 
@@ -61,8 +57,6 @@ rows = [
   [
     "branch",
     { token = "$behind", fg = "#f38ba8", bold = true },
-    { token = "$ahead",  fg = "#a6e3a1" },
-    { token = "$sync_stale", fg = "#6c7086", dim = true },
   ],
 ]
 `
@@ -74,10 +68,6 @@ rows = [
     "branch",
     { token = "$behind", fg = "#f38ba8", bold = true },
     { token = "$ahead", fg = "#a6e3a1" },
-    { token = "$gone", fg = "#6c7086" },
-    { token = "$merged", fg = "#6c7086" },
-    { token = "$catchup", fg = "#fab387", bold = true },
-    { token = "$sync_stale", fg = "#6c7086", dim = true },
   ],
 ]
 `
@@ -109,7 +99,7 @@ const mergeTargetNote = `통합 브랜치가 origin/HEAD 가 아닌 저장소에
 
 // 헤더 없이 부모 테이블 아래 점 키로 적은 사이드바 행이다. TOML 로는 [ui.sidebar.spaces] 와 같은 테이블이다.
 const dottedRows = `[ui.sidebar]
-spaces.rows = [["state_icon", "workspace"], ["branch", { token = "$behind" }, { token = "$ahead" }]]
+spaces.rows = [["state_icon", "workspace"], ["branch", { token = "$behind" }]]
 `
 
 // 점 키로 적은 사이드바 행에 우리 토큰이 하나도 없는 경우다. 세 가지 모양 모두 TOML 로는 같은 키다.
@@ -128,6 +118,27 @@ const rootDottedRowsNoTokens = `ui.sidebar.spaces.rows = [["state_icon", "worksp
 const prefixOnlyTokens = `[ui.sidebar.spaces]
 rows = [["state_icon", "workspace"], ["branch", { token = "$merged_prs" }, { token = "$ahead_x" }]]
 `
+
+func TestLegacyStatusTokensAreNotSidebarContent(t *testing.T) {
+	for _, tc := range []struct{ key, name string }{
+		{"merged_token", "merged"}, {"gone_token", "gone"},
+		{"catchup_token", "catchup"}, {"stale_token", "sync_stale"},
+		{"merged_token", "finished"}, {"gone_token", "deleted"},
+		{"catchup_token", "conflicts"}, {"stale_token", "old"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := loadConfig(t, `{"`+tc.key+`":"`+tc.name+`"}`)
+			scan := herdrconfig.Parse(`[ui.sidebar.spaces]
+rows = [["branch", { token = "$` + tc.name + `" }]]`)
+			if SidebarConfigured(cfg, scan) {
+				t.Fatal("a legacy status token alone must not count as visible sidebar content")
+			}
+			if got := Render(cfg, scan, configPath); strings.Contains(got, `"$`+tc.name+`"`) {
+				t.Fatalf("setup must not suggest the retired token: %s", got)
+			}
+		})
+	}
+}
 
 func TestRender(t *testing.T) {
 	cases := []struct {
@@ -151,8 +162,7 @@ func TestRender(t *testing.T) {
 			want: []string{
 				configPath + " 에 아래를 더하세요.",
 				"이미 [ui.sidebar.spaces] 를 쓰고 있으니 아래 토큰 항목을 그 행에 더하세요.",
-				`    { token = "$behind",     fg = "#f38ba8", bold = true },`,
-				`    { token = "$sync_stale", fg = "#6c7086", dim = true },`,
+				`    { token = "$behind", fg = "#f38ba8", bold = true },`,
 				"[[keys.command]]\nkey = \"prefix+shift+u\"",
 				"# command = \"git-upstream.new-worktree\"",
 				"git config --add git-upstream.mergeTarget origin/develop",
@@ -169,14 +179,10 @@ func TestRender(t *testing.T) {
 			toml: someTokens,
 			want: []string{
 				"이미 [ui.sidebar.spaces] 를 쓰고 있으니 아래 토큰 항목을 그 행에 더하세요.",
-				`    { token = "$gone",    fg = "#6c7086" },`,
-				`    { token = "$merged",  fg = "#6c7086" },`,
-				`    { token = "$catchup", fg = "#fab387", bold = true },`,
+				`token = "$ahead"`,
 			},
 			unwanted: []string{
 				`token = "$behind"`,
-				`token = "$ahead"`,
-				`token = "$sync_stale"`,
 			},
 		},
 		{
@@ -223,13 +229,12 @@ func TestRender(t *testing.T) {
 			exact: "설정이 모두 들어 있습니다.\n\n" + mergeTargetNote,
 		},
 		{
-			// `$merged_prs` 는 `$merged` 가 아니다. 앞부분만 같은 남의 토큰에 속아 우리 항목을 빼면 안 된다.
+			// `$ahead_x`는 `$ahead`가 아니다. 앞부분만 같은 남의 토큰에 속아 우리 항목을 빼면 안 된다.
 			name: "접두사만 같은 다른 토큰이 있음",
 			toml: prefixOnlyTokens,
 			want: []string{
 				"이미 [ui.sidebar.spaces] 를 쓰고 있으니 아래 토큰 항목을 그 행에 더하세요.",
-				`    { token = "$ahead",      fg = "#a6e3a1" },`,
-				`    { token = "$merged",     fg = "#6c7086" },`,
+				`    { token = "$ahead",  fg = "#a6e3a1" },`,
 			},
 			unwanted: []string{"사이드바 토큰은 이미 들어 있습니다."},
 		},
@@ -240,14 +245,12 @@ func TestRender(t *testing.T) {
 			toml: dottedRows,
 			want: []string{
 				"이미 [ui.sidebar.spaces] 를 쓰고 있으니 아래 토큰 항목을 그 행에 더하세요.",
-				`    { token = "$gone",       fg = "#6c7086" },`,
-				`    { token = "$sync_stale", fg = "#6c7086", dim = true },`,
+				`token = "$ahead"`,
 			},
 			unwanted: []string{
 				"[ui.sidebar.spaces]\nrows = [",
 				`["state_icon", "workspace"]`,
 				`token = "$behind"`,
-				`token = "$ahead"`,
 			},
 		},
 		{
@@ -257,8 +260,7 @@ func TestRender(t *testing.T) {
 			toml: dottedRowsNoTokens,
 			want: []string{
 				"이미 [ui.sidebar.spaces] 를 쓰고 있으니 아래 토큰 항목을 그 행에 더하세요.",
-				`    { token = "$behind",     fg = "#f38ba8", bold = true },`,
-				`    { token = "$sync_stale", fg = "#6c7086", dim = true },`,
+				`    { token = "$behind", fg = "#f38ba8", bold = true },`,
 			},
 			unwanted: []string{
 				"[ui.sidebar.spaces]\nrows = [",
@@ -271,7 +273,7 @@ func TestRender(t *testing.T) {
 			toml: grandparentDottedRowsNoTokens,
 			want: []string{
 				"이미 [ui.sidebar.spaces] 를 쓰고 있으니 아래 토큰 항목을 그 행에 더하세요.",
-				`    { token = "$behind",     fg = "#f38ba8", bold = true },`,
+				`    { token = "$behind", fg = "#f38ba8", bold = true },`,
 			},
 			unwanted: []string{"[ui.sidebar.spaces]\nrows = [", "rows = ["},
 		},
@@ -280,7 +282,7 @@ func TestRender(t *testing.T) {
 			toml: rootDottedRowsNoTokens,
 			want: []string{
 				"이미 [ui.sidebar.spaces] 를 쓰고 있으니 아래 토큰 항목을 그 행에 더하세요.",
-				`    { token = "$behind",     fg = "#f38ba8", bold = true },`,
+				`    { token = "$behind", fg = "#f38ba8", bold = true },`,
 			},
 			unwanted: []string{"[ui.sidebar.spaces]\nrows = [", "rows = ["},
 		},
@@ -291,8 +293,7 @@ func TestRender(t *testing.T) {
 			toml: "[ui.sidebar.spaces]\nrow_gap = 1\n",
 			want: []string{
 				"이미 [ui.sidebar.spaces] 테이블이 있으니 그 아래에 rows 를 더하세요.\nrows = [\n  [\"state_icon\", \"workspace\"],",
-				`    { token = "$behind",     fg = "#f38ba8", bold = true },`,
-				`    { token = "$sync_stale", fg = "#6c7086", dim = true },`,
+				`    { token = "$behind", fg = "#f38ba8", bold = true },`,
 			},
 			unwanted: []string{
 				"[ui.sidebar.spaces]\nrows = [",
@@ -313,11 +314,7 @@ func TestRender(t *testing.T) {
 			toml: "",
 			json: `{"behind_token":"down","ahead_token":"","gone_token":"g","stale_token":"old"}`,
 			want: []string{
-				`    { token = "$down",    fg = "#f38ba8", bold = true },`,
-				`    { token = "$g",       fg = "#6c7086" },`,
-				`    { token = "$merged",  fg = "#6c7086" },`,
-				`    { token = "$catchup", fg = "#fab387", bold = true },`,
-				`    { token = "$old",     fg = "#6c7086", dim = true },`,
+				`    { token = "$down", fg = "#f38ba8", bold = true },`,
 			},
 			unwanted: []string{
 				// 빈 이름은 보고하지 않으므로 행에도 넣지 않는다.

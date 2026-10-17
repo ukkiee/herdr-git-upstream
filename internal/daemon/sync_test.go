@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"os"
@@ -64,8 +65,8 @@ func TestTokensForUpToDateMainIsQuiet(t *testing.T) {
 	})
 }
 
-// 일반 병합된 브랜치는 merged 라벨을 받는다.
-func TestTokensForMergedBranch(t *testing.T) {
+// 병합된 브랜치도 기존 merged 값을 지우는 빈 토큰을 보고한다.
+func TestReportMergedBranchClearsLegacyToken(t *testing.T) {
 	s := newTestSyncer(t)
 	f := newRepoFixture(t)
 	f.startFeature(t, "feature")
@@ -77,13 +78,31 @@ func TestTokensForMergedBranch(t *testing.T) {
 	item := s.resolveOne(t, f.work)
 	// fetchAll 이 통합 브랜치(origin/main)도 가져와야 판정이 최신이 된다.
 	s.fetchAll(context.Background(), []target{item}, true)
-	tokens := s.tokensFor(context.Background(), item, time.Now())
-	expectTokens(t, tokens, map[string]string{
-		"behind": "", "ahead": "", "sync_stale": "", "gone": "", "merged": "merged", "catchup": "",
-	})
+	for _, tokenName := range []string{"merged", "finished"} {
+		t.Run(tokenName, func(t *testing.T) {
+			s.Config.MergedToken = tokenName
+			s.Config.MergedLabel = "merged"
+			dir := t.TempDir()
+			t.Setenv(daemonTestDir, dir)
+			t.Setenv("GORACE", "atexit_sleep_ms=0")
+			s.Herdr = &herdrcli.Client{Binary: os.Args[0]}
+			s.reportAll(context.Background(), []target{item})
+			raw, err := os.ReadFile(filepath.Join(dir, "report.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var tokens map[string]string
+			if err := json.Unmarshal(raw, &tokens); err != nil {
+				t.Fatal(err)
+			}
+			expectTokens(t, tokens, map[string]string{
+				"behind": "", "ahead": "", "sync_stale": "", "gone": "", tokenName: "", "catchup": "",
+			})
+		})
+	}
 }
 
-// 원격에서 지워진 브랜치는 gone 라벨을 받는다. fetch 가 영구 실패로 기록되는 것이 근거다.
+// 원격에서 지워진 브랜치도 상태 문구 없이 숫자만 보고한다.
 func TestTokensForGoneBranch(t *testing.T) {
 	s := newTestSyncer(t)
 	f := newRepoFixture(t)
@@ -94,8 +113,8 @@ func TestTokensForGoneBranch(t *testing.T) {
 	item := s.resolveOne(t, f.work)
 	s.fetchAll(context.Background(), []target{item}, true)
 	tokens := s.tokensFor(context.Background(), item, time.Now())
-	if tokens["gone"] != "gone" {
-		t.Fatalf("지워진 브랜치는 gone 이어야 한다: %v", tokens)
+	if value, ok := tokens["gone"]; !ok || value != "" {
+		t.Fatalf("지워진 브랜치도 gone을 지워야 한다: %v", tokens)
 	}
 	if tokens["merged"] != "" {
 		t.Fatalf("병합되지 않았으니 merged 는 비어야 한다: %v", tokens)
@@ -105,7 +124,7 @@ func TestTokensForGoneBranch(t *testing.T) {
 	}
 }
 
-// 뒤처졌고 같은 파일을 고쳤으면 catchup 이 충돌 라벨을 받는다. 다른 파일이면 비어 있다.
+// 충돌 여부는 worktree 화면용 캐시에 남기되 사이드바에는 숫자만 보고한다.
 func TestTokensForCatchup(t *testing.T) {
 	s := newTestSyncer(t)
 	if !s.Git.SupportsMergeTree(context.Background()) {
@@ -125,7 +144,7 @@ func TestTokensForCatchup(t *testing.T) {
 		fetched := s.Store.LoadRecord(fetchKey)
 		tokens := s.tokensFor(context.Background(), item, time.Now())
 		expectTokens(t, tokens, map[string]string{
-			"behind": "↓1", "ahead": "↑1", "sync_stale": "", "gone": "", "merged": "", "catchup": "conflict",
+			"behind": "↓1", "ahead": "↑1", "sync_stale": "", "gone": "", "merged": "", "catchup": "",
 		})
 		// 판정이 기록에 남아 다음 회차가 merge-tree 를 다시 돌리지 않는다.
 		record := s.Store.LoadCatchupRecord(catchupKey(item))
@@ -151,7 +170,47 @@ func TestTokensForCatchup(t *testing.T) {
 	})
 }
 
-// upstream 이 없는 새 브랜치도 merged 는 판정한다. origin/main 에서 방금 만든 빈 브랜치가 그 예다.
+// 오래된 fetch 실패와 사용자 지정 토큰 이름이 있어도 숫자만 남기고 이전 문구는 지운다.
+func TestReportOnlyCountsWithLegacyStatusTokens(t *testing.T) {
+	s := newTestSyncer(t)
+	f := newRepoFixture(t)
+	run(t, f.seed, "git", "commit", "--quiet", "--allow-empty", "-m", "advance")
+	run(t, f.seed, "git", "push", "--quiet", "origin", "main")
+	run(t, f.work, "git", "fetch", "--quiet", "origin")
+	item := s.resolveOne(t, f.work)
+	record := state.Record{}
+	record = record.MarkFailure(time.Now().Add(-time.Hour), "network unavailable", false)
+	if err := s.Store.SaveRecord(state.Key(item.Upstream.FetchKey(item.Repo.CommonDir)), record); err != nil {
+		t.Fatal(err)
+	}
+	for _, custom := range []bool{false, true} {
+		if custom {
+			s.Config.GoneToken = "deleted"
+			s.Config.MergedToken = "finished"
+			s.Config.CatchupToken = "conflicts"
+			s.Config.StaleToken = "old"
+		}
+		dir := t.TempDir()
+		t.Setenv(daemonTestDir, dir)
+		t.Setenv("GORACE", "atexit_sleep_ms=0")
+		s.Herdr = &herdrcli.Client{Binary: os.Args[0]}
+		s.reportAll(context.Background(), []target{item})
+		raw, err := os.ReadFile(filepath.Join(dir, "report.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var tokens map[string]string
+		if err := json.Unmarshal(raw, &tokens); err != nil {
+			t.Fatal(err)
+		}
+		expectTokens(t, tokens, map[string]string{
+			"behind": "↓1", "ahead": "", s.Config.GoneToken: "", s.Config.MergedToken: "",
+			s.Config.CatchupToken: "", s.Config.StaleToken: "",
+		})
+	}
+}
+
+// upstream이 없는 새 브랜치에도 merged를 표시하지 않는다.
 func TestTokensForFreshBranchWithoutUpstream(t *testing.T) {
 	s := newTestSyncer(t)
 	f := newRepoFixture(t)
@@ -163,7 +222,7 @@ func TestTokensForFreshBranchWithoutUpstream(t *testing.T) {
 	}
 	tokens := s.tokensFor(context.Background(), item, time.Now())
 	expectTokens(t, tokens, map[string]string{
-		"behind": "", "ahead": "", "sync_stale": "", "gone": "", "merged": "merged", "catchup": "",
+		"behind": "", "ahead": "", "sync_stale": "", "gone": "", "merged": "", "catchup": "",
 	})
 }
 
@@ -279,8 +338,8 @@ func TestTokensForEmptyRemoteCloneIsNotGone(t *testing.T) {
 	})
 }
 
-// HEAD 가 분리되어 있으면 upstream 이 없으므로 merged 만 판정한다. README 가 그렇게 약속한다.
-func TestTokensForDetachedHeadJudgesMergedOnly(t *testing.T) {
+// HEAD가 분리되어 있으면 사이드바 토큰을 모두 비운다.
+func TestTokensForDetachedHeadIsQuiet(t *testing.T) {
 	s := newTestSyncer(t)
 	f := newRepoFixture(t)
 	run(t, f.work, "git", "checkout", "--quiet", "--detach", "origin/main")
@@ -291,7 +350,7 @@ func TestTokensForDetachedHeadJudgesMergedOnly(t *testing.T) {
 	}
 	tokens := s.tokensFor(context.Background(), item, time.Now())
 	expectTokens(t, tokens, map[string]string{
-		"behind": "", "ahead": "", "sync_stale": "", "gone": "", "merged": "merged", "catchup": "",
+		"behind": "", "ahead": "", "sync_stale": "", "gone": "", "merged": "", "catchup": "",
 	})
 }
 

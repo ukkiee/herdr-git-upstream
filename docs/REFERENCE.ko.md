@@ -55,14 +55,11 @@ rows = [
 |---|---|---|
 | `$behind` | `↓3` | 원격에 내가 아직 받지 않은 커밋이 3개 있다 |
 | `$ahead` | `↑1` | 내가 아직 올리지 않은 커밋이 1개 있다 |
-| `$gone` | `gone` | upstream 브랜치가 원격에서 사라졌다. 대개 병합된 뒤 지워진 것이다 |
-| `$merged` | `merged` | HEAD의 내용이 이미 어느 원격 브랜치에 들어가 있다 |
-| `$catchup` | `conflict` | 뒤처진 커밋을 따라잡으면 충돌한다. **충돌할 때만** 값이 있고, 깨끗하거나 뒤처지지 않았으면 빈 값이다 |
-| `$sync_stale` | `stale` | fetch가 오래 실패하고 있어 위 숫자를 믿을 수 없다 |
 
 값이 0이거나 해당 사항이 없으면 토큰이 비고, herdr가 그 자리를 지운다. 저장소가 아니거나 커밋이
-하나도 없으면 아무것도 표시하지 않는다. HEAD가 분리되어 있거나 upstream이 없는 브랜치(아직 push 하지
-않은 새 브랜치)에서는 `$merged`만 판정한다. 방금 만든 빈 브랜치도 통합 브랜치의 조상이면 `merged`다.
+하나도 없으면 아무것도 표시하지 않는다. HEAD가 분리되어 있거나 upstream이 없는 브랜치에서도
+사이드바 토큰을 비운다. 사이드바에는 숫자만 표시하고 `merged`, `gone`, `conflict`, `stale`은
+표시하지 않는다. 기존 상태 문구 토큰은 다음 보고에서 지우며 브랜치 판정은 worktree 화면에 남긴다.
 
 ## 설정
 
@@ -74,19 +71,10 @@ rows = [
   "interval_seconds": 60,
   "throttle_seconds": 120,
   "fetch_timeout_seconds": 20,
-  "stale_after_seconds": 900,
   "behind_token": "behind",
   "ahead_token": "ahead",
-  "stale_token": "sync_stale",
   "behind_prefix": "↓",
   "ahead_prefix": "↑",
-  "stale_label": "stale",
-  "gone_token": "gone",
-  "gone_label": "gone",
-  "merged_token": "merged",
-  "merged_label": "merged",
-  "catchup_token": "catchup",
-  "catchup_conflict_label": "conflict",
   "fresh_worktrees": true,
   "enabled": true
 }
@@ -97,13 +85,15 @@ rows = [
 | `interval_seconds` | 60 | 전체 워크스페이스를 한 바퀴 도는 간격 (5초 ~ 24시간) |
 | `throttle_seconds` | 120 | 같은 저장소를 다시 가져오기까지의 최소 간격 |
 | `fetch_timeout_seconds` | 20 | 저장소 하나당 fetch 제한 시간 |
-| `stale_after_seconds` | 900 | 실패가 이만큼 이어지면 `stale`을 띄운다 |
-| `gone_token` | `gone` | upstream이 원격에서 사라졌을 때 보고할 토큰 이름 |
-| `gone_label` | `gone` | 그때 채우는 값 |
-| `merged_token` | `merged` | HEAD가 이미 어느 원격 브랜치에 들어가 있을 때 보고할 토큰 이름 |
-| `merged_label` | `merged` | 그때 채우는 값 |
-| `catchup_token` | `catchup` | 따라잡을 때 충돌하는지 알릴 토큰 이름 |
-| `catchup_conflict_label` | `conflict` | 충돌할 때만 채우는 값. 깨끗하면 빈 값이다 |
+| `stale_after_seconds` | 900 | 이전 설정과의 호환용. 사이드바 경고를 표시하지 않는다 |
+| `gone_token` | `gone` | 이전 사이드바 값을 지울 토큰 이름 |
+| `gone_label` | `gone` | 이전 설정과의 호환용. 표시하지 않는다 |
+| `merged_token` | `merged` | 이전 버전의 사이드바 값을 지울 토큰 이름. 항상 빈 값을 보고한다 |
+| `merged_label` | `merged` | 이전 설정과의 호환용. 읽지만 표시에 사용하지 않는다 |
+| `catchup_token` | `catchup` | 이전 사이드바 값을 지울 토큰 이름 |
+| `catchup_conflict_label` | `conflict` | 이전 설정과의 호환용. 표시하지 않는다 |
+| `stale_token` | `sync_stale` | 이전 사이드바 값을 지울 토큰 이름 |
+| `stale_label` | `stale` | 이전 설정과의 호환용. 표시하지 않는다 |
 | `fresh_worktrees` | true | 새로 만든 worktree를 원격의 최신 상태로 맞춘다 |
 | `enabled` | true | false로 두면 이 플러그인이 올린 토큰을 지우고 쉰다 |
 
@@ -115,8 +105,8 @@ herdr를 재시작하지 않아도 주기를 바꿀 수 있다.
 HEAD도 확인한다. 작업 파일과 객체 내용은 훑지 않는다. 변경이 없으면 Git 명령·fetch·토큰 보고를
 실행하지 않는다. 변경된 저장소·체크아웃만 토큰을 다시 계산하며 보고 실패는 다음 검사에서 재시도한다.
 보고 직전에 HEAD를 다시 읽고 보고를 직렬화하므로 늦게 끝난 fetch가 pull 이전 HEAD로 덮어쓰지 않는다.
-새로 열거나 이동한 워크스페이스는 기존 포커스·정기 회차에서 발견한다. `gone`·`stale`은 플러그인의
-fetch 기록을 계속 사용한다. 로컬 참조 변경만으로 원격 통신 성공을 추정하지 않는다.
+새로 열거나 이동한 워크스페이스는 기존 포커스·정기 회차에서 발견한다.
+로컬 참조 변경만으로 원격 통신 성공을 추정하지 않는다.
 변경 감지는 fetch와 독립적으로 돌지만 Git 계산과 herdr 보고 시간은 추가로 필요하다.
 
 ## worktree 화면
@@ -281,7 +271,7 @@ herdr startup 훅 ─┐
                   ├─► 데몬 (herdr 바깥에서 계속 돎)
 포커스 이벤트 ────┘        │
   쪽지만 남기고 즉시 끝남   ├─ 저장소마다 좁은 fetch (현재 브랜치와 통합 브랜치)
-                           ├─ 워크스페이스마다 gone / merged / catchup 판정
+                           ├─ 커밋 수 계산과 worktree 화면용 catchup 캐시 갱신
                            └─ 워크스페이스마다 토큰 보고
 ```
 
@@ -333,17 +323,10 @@ ssh를 지정하며, 그 경우에도 멈춤은 제한 시간이 걷어 낸다.
 깨끗하지 않거나, 새 브랜치에 이미 커밋이 있거나, 기준으로 삼을 브랜치가 둘 이상이어서 모호하면
 아무것도 하지 않는다. 짐작해서 옮기느니 그대로 두는 편이 낫기 때문이다.
 
-**첫 실패로는 경고하지 않는다.** 잠시 끊긴 네트워크나 아직 연결하지 않은 VPN 때문에 곧바로
-`stale`이 뜨면, 정작 사람이 손봐야 하는 상황과 구별되지 않는다. 실패가 이어진 시간을 기준으로 삼는다.
+**fetch 실패는 로그와 기록에 남긴다.** 사이드바에는 경고 문구를 표시하지 않는다.
+원격에서 사라진 브랜치의 `gone` 판정은 worktree 화면의 조회 결과로 확인한다.
 
-**`gone`은 fetch 실패에서 읽는다.** 현재 브랜치의 upstream을 참조 하나로 좁게 가져오므로, 원격에서
-그 브랜치가 지워지면 fetch가 "원격 참조 없음"으로 실패한다. 그 기록이 곧 `gone`이다. `ls-remote`도
-prune도 부르지 않으므로 값이 0이고, 사용자의 참조를 지우지도 않는다. 이 실패는 다시 시도해도 같으므로
-`stale`로 세지 않는다. 근거를 더 요구하지 않으므로 원격에서 지워지고 로컬에서 prune까지 된 뒤에 처음
-본 브랜치도 `gone`이다. 커밋이 하나도 없는 저장소만 뺀다. 빈 원격을 clone한 직후에도 git이
-`branch.main`을 잡아 두어 같은 실패가 나지만, 태어나지 않은 브랜치는 사라질 수 없기 때문이다.
-
-**`merged`는 조상 검사와 merge-tree 비교로 판정한다.** 먼저 `git for-each-ref --contains HEAD
+**worktree 화면의 `merged`는 조상 검사와 merge-tree 비교로 판정한다.** 먼저 `git for-each-ref --contains HEAD
 refs/remotes/`로 자기 참조가 아닌 원격 브랜치가 HEAD를 품고 있는지 본다. 자기 참조란 원격마다 있는
 이 브랜치의 사본(`refs/remotes/<원격>/<브랜치>`)과 upstream 추적 참조다. push만 해도 사본은 HEAD를
 품으므로 그것은 근거가 아니고, `refs/pull/*/head`처럼 브랜치가 아닌 것을 가져오는 참조 사양의
@@ -378,7 +361,7 @@ HEAD`의 종료 코드로 충돌 여부를 안다. 뒤처짐이 0보다 클 때�
 따라가는 브랜치가 여럿이어도 서로의 캐시를 지우지 않고, fetch 기록과 다른 파일이라 판정이 다른
 세션의 데몬이 남긴 fetch 결과를 덮지도 않는다. 판정하지 못한 쌍(관계없는 역사, 제한 시간 초과)도
 남겨 한 시간 안에는 다시 시도하지 않는다. `merge-tree --write-tree`는 git 2.38에서 생겼으므로 그
-아래에서는 이 토큰만 조용히 쉬고, `merged`는 조상 검사만 한다. `status`의 `merge_tree_supported`가
+아래에서는 충돌 판정을 생략하고, `merged`는 조상 검사만 한다. `status`의 `merge_tree_supported`가
 그 사실을 알려 준다.
 
 **통합 브랜치도 함께 가져온다.** 통합 브랜치의 추적 참조가 낡으면 `merged` 판정도 낡는다. 그래서
@@ -417,11 +400,10 @@ herdr plugin action invoke stop      --plugin git-upstream # 데몬 중지
 tail -f "$(./bin/herdr-git-upstream status | sed -n 's/.*"log_path": "\(.*\)".*/\1/p')"
 ```
 
-상세 로그가 필요하면 `HERDR_GIT_UPSTREAM_DEBUG=1`을 준 채로 데몬을 다시 띄운다. `merged`가 붙은
-이유(조상 검사인지, 어느 통합 브랜치와의 merge-tree 비교인지)도 이 수준에서 보인다.
+상세 로그가 필요하면 `HERDR_GIT_UPSTREAM_DEBUG=1`을 준 채로 데몬을 다시 띄운다.
 
-`catchup`이 한 번도 뜨지 않으면 `status`의 `git_version`과 `merge_tree_supported`를 본다.
-git 2.38 미만에서는 이 토큰이 쉰다.
+worktree 화면의 충돌 판정이 없으면 `status`의 `git_version`과 `merge_tree_supported`를 본다.
+Git 2.38 미만에서는 충돌 판정을 생략한다.
 
 아무것도 보이지 않는다면 대개 둘 중 하나다. 사이드바 `rows`에 토큰을 넣지 않았거나,
 사이드바를 접어 두었거나(접힌 상태에서는 herdr가 번호와 상태 점만 그린다). 앞의 경우는 `status`의

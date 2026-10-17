@@ -54,21 +54,19 @@ type target struct {
 	Dir         string
 	Repo        gitrepo.Repo
 	Upstream    gitrepo.Upstream
-	// HasRepo는 Dir가 git 저장소 안이라는 뜻이다. upstream이 없어도 merged는 판정할 수 있으므로
-	// Resolved와 따로 둔다. 아직 push 하지 않은 새 브랜치도 dev의 조상이면 merged다.
+	// HasRepo는 Dir가 git 저장소 안이라는 뜻이다. upstream 없이도 통합 브랜치를 fetch하고
+	// 로컬 참조 변경을 감지할 수 있으므로 Resolved와 따로 둔다.
 	HasRepo bool
 	// Head는 체크아웃된 커밋이다. 커밋이 하나도 없는 저장소에서는 비어 있고, 그때는 판정할 것이 없다.
 	Head string
-	// Branch는 체크아웃된 브랜치 이름이다. HEAD가 분리되어 있으면 비어 있다. upstream이 없어도
-	// 필요하다. merged 판정이 자기 사본(refs/remotes/<원격>/<브랜치>)을 근거에서 빼려면 알아야 한다.
+	// Branch는 체크아웃된 브랜치 이름이다. HEAD가 분리되어 있으면 비어 있다.
 	Branch string
 	// Remote는 판정에 쓰는 원격이다. upstream의 원격이거나, 없으면 judge.RemoteFor가 고른 것이다.
 	Remote string
 	// Integration은 통합 브랜치들이다. merged 판정의 상대이자 함께 가져와야 할 참조다.
 	// 통합 브랜치의 추적 참조가 낡으면 판정도 낡는다.
 	Integration []gitrepo.Upstream
-	// DefaultKnown이 거짓이면 원격 기본 브랜치를 알지 못해 Integration에 없다. 그때는 merged를 판정하지
-	// 않는다. 통합 브랜치 자체를 체크아웃한 자리를 가려낼 수 없어 거짓 양성이 나기 때문이다.
+	// DefaultKnown은 원격 기본 브랜치를 알아내 Integration에 포함했는지 나타낸다.
 	DefaultKnown bool
 	// LookupDefaultBranch가 참이면 원격 기본 브랜치를 로컬에서도 기록에서도 알 수 없어 원격에 물어야
 	// 한다. 네트워크를 타므로 fetch와 같은 자리에서 하고, 알아낸 답은 fetch 뒤 refreshIntegration이
@@ -146,8 +144,8 @@ func (s *Syncer) resolveTargets(ctx context.Context, panes []herdrcli.Pane, anch
 }
 
 // resolveTarget은 워크스페이스 하나의 저장소, HEAD, upstream, 원격, 통합 브랜치를 차례로 채운다.
-// 앞 단계가 안 되면 거기서 멈추되, 채운 것까지는 남긴다. upstream이 없어도 저장소이면 merged는
-// 판정할 수 있으므로 HasRepo와 Resolved를 따로 둔다.
+// 앞 단계가 안 되면 거기서 멈추되, 채운 것까지는 남긴다. upstream이 없어도 통합 브랜치는
+// fetch하므로 HasRepo와 Resolved를 따로 둔다.
 func (s *Syncer) resolveTarget(ctx context.Context, item target) target {
 	repo, err := s.Git.Discover(ctx, item.Dir)
 	if err != nil {
@@ -171,7 +169,7 @@ func (s *Syncer) resolveTarget(ctx context.Context, item target) target {
 		}
 	}
 	// upstream이 없는 것은 HEAD가 분리되었거나 아직 push 하지 않은 경우로, 사용자가 손볼 일이지
-	// 오류로 떠들 일은 아니다. 그래도 어느 원격을 볼지 정할 수 있으면 merged는 판정한다.
+	// 오류로 떠들 일은 아니다. 그래도 어느 원격을 볼지 정할 수 있으면 통합 브랜치를 가져온다.
 	remote, ok := judge.RemoteFor(ctx, s.Git, repo, upstream)
 	if !ok {
 		return item
@@ -197,8 +195,7 @@ func (s *Syncer) fillIntegration(ctx context.Context, item target) target {
 // refreshIntegration은 원격에 기본 브랜치를 물은 워크스페이스의 통합 브랜치 목록을 다시 읽는다.
 //
 // resolveTargets가 목록을 채운 뒤에야 fetchAll이 원격에 묻고 기록에 남기므로, 그대로 두면 그 답은
-// 다음 회차에나 쓰인다. 그 한 회차 동안 통합 브랜치를 모르는 채 판정하면 통합 브랜치 자체를 체크아웃한
-// 자리에 merged가 붙고, 원격이 닿지 않아 물음이 실패하면 그 상태가 하루 동안 이어진다. 다시 읽는 것은
+// 다음 회차에나 쓰인다. 같은 회차에서 최신 통합 브랜치 목록을 보관하도록 다시 읽는다.
 // 로컬 읽기라 값이 싸고, 물은 워크스페이스에서만 한다.
 func (s *Syncer) refreshIntegration(ctx context.Context, targets []target) {
 	for i, item := range targets {
@@ -379,23 +376,9 @@ func (s *Syncer) reportAll(ctx context.Context, targets []target) {
 // 한 요청에 받는 상한(16개) 안이다.
 func (s *Syncer) tokensFor(ctx context.Context, item target, now time.Time) map[string]string {
 	tokens := map[string]string{}
-	behind, ahead, stale, gone, merged, catchup := "", "", "", "", "", ""
+	behind, ahead := "", ""
 
-	var upstream *gitrepo.Upstream
-	if item.Resolved {
-		upstream = &item.Upstream
-		record := s.Store.LoadRecord(state.Key(item.Upstream.FetchKey(item.Repo.CommonDir)))
-		if record.Stale(now, s.Config.StaleAfter) {
-			stale = s.Config.StaleLabel
-		}
-		// gone은 fetch 기록만 본다. 원격에 다시 묻지 않으므로 값이 0이다. 커밋이 하나도 없는 저장소는
-		// 빼는데, 빈 원격을 clone한 직후에도 git이 branch.main을 잡아 두어 같은 실패가 나지만 태어나지
-		// 않은 브랜치는 사라질 수 없기 때문이다.
-		if item.Head != "" && judge.Gone(record) {
-			gone = s.Config.GoneLabel
-		}
-	}
-	// 뒤처짐과 앞섬은 회차 첫머리에 읽어 둔 HEAD로 센다. 그래야 같은 회차의 merged, catchup과 같은
+	// 뒤처짐과 앞섬은 회차 첫머리에 읽어 둔 HEAD로 센다. 그래야 같은 회차의 catchup과 같은
 	// 커밋을 말한다. 커밋이 하나도 없는 저장소는 셀 것이 없다.
 	if item.Resolved && item.Head != "" {
 		counts, err := s.Git.CountsBetween(ctx, item.Repo, item.Head, item.Upstream.TrackingRef)
@@ -409,39 +392,21 @@ func (s *Syncer) tokensFor(ctx context.Context, item target, now time.Time) map[
 			if counts.Ahead > 0 {
 				ahead = s.Config.AheadPrefix + strconv.Itoa(counts.Ahead)
 			}
-			// 뒤처졌을 때만 따라잡기를 본다. 뒤처지지 않았으면 따라잡을 것이 없다.
-			if counts.Behind > 0 && s.catchupConflicts(ctx, item, now) {
-				catchup = s.Config.CatchupConflictLabel
+			// worktree 화면에서 재사용하는 따라잡기 캐시는 계속 갱신한다.
+			if counts.Behind > 0 {
+				s.refreshCatchup(ctx, item, now)
 			}
 		}
 	}
 
-	// merged는 upstream이 없어도 판정한다. 커밋이 하나도 없는 저장소는 판정할 것이 없고, 원격 기본
-	// 브랜치를 끝내 알아내지 못한 저장소도 판정하지 않는다. 통합 브랜치 자체를 체크아웃한 자리를
-	// 가려낼 수 없어, 거기서 갈라져 나간 원격 브랜치 하나만 있어도 조상 검사가 merged를 붙이기 때문이다.
-	if item.HasRepo && item.Head != "" && item.DefaultKnown {
-		integrationRefs := make([]string, 0, len(item.Integration))
-		for _, up := range item.Integration {
-			integrationRefs = append(integrationRefs, up.TrackingRef)
-		}
-		self := judge.SelfRefs(ctx, s.Git, item.Repo, item.Branch, upstream)
-		verdict, err := judge.JudgeMerged(ctx, s.Git, item.Repo, item.Head, self, integrationRefs)
-		if err != nil {
-			s.Log.Debug("merged 를 판정하지 못했다", "repo", item.Repo.Root, "error", err)
-		}
-		if verdict.Yes {
-			merged = s.Config.MergedLabel
-			s.Log.Debug("merged", "repo", item.Repo.Root, "by", verdict.By)
-		}
-	}
-
+	// 기존 설정에 남은 상태 문구 토큰도 다음 보고에서 지운다.
 	for name, value := range map[string]string{
 		s.Config.BehindToken:  behind,
 		s.Config.AheadToken:   ahead,
-		s.Config.StaleToken:   stale,
-		s.Config.GoneToken:    gone,
-		s.Config.MergedToken:  merged,
-		s.Config.CatchupToken: catchup,
+		s.Config.StaleToken:   "",
+		s.Config.GoneToken:    "",
+		s.Config.MergedToken:  "",
+		s.Config.CatchupToken: "",
 	} {
 		if name != "" {
 			tokens[name] = value
@@ -455,19 +420,19 @@ func catchupKey(item target) string {
 	return state.CatchupKey(item.Upstream.FetchKey(item.Repo.CommonDir), item.Upstream.Branch)
 }
 
-// catchupConflicts는 따라잡을 때 충돌하는지 판정하고, 판정이 새로 계산되었으면 기록에 남긴다.
+// refreshCatchup은 worktree 화면을 위해 따라잡기 판정을 갱신한다.
 // 기록을 남겨야 다음 회차가 같은 (HEAD, 추적 참조 커밋) 쌍에서 merge-tree를 다시 돌리지 않는다.
 //
 // 따라잡기 기록은 fetch 기록과 다른 파일이다. fetch 기록을 여기서 되쓰면, 같은 저장소를 도는 다른
 // herdr 세션의 데몬이 그 사이에 남긴 fetch 결과를 회차 첫머리에 읽어 둔 낡은 값으로 덮는다.
-func (s *Syncer) catchupConflicts(ctx context.Context, item target, now time.Time) bool {
+func (s *Syncer) refreshCatchup(ctx context.Context, item target, now time.Time) {
 	trackingCommit, err := s.Git.CommitOf(ctx, item.Repo, item.Upstream.TrackingRef)
 	if err != nil {
-		return false
+		return
 	}
 	key := catchupKey(item)
 	record := s.Store.LoadCatchupRecord(key)
-	result, updated, err := judge.JudgeCatchup(ctx, s.Git, item.Repo, item.Head, trackingCommit, record, now)
+	_, updated, err := judge.JudgeCatchup(ctx, s.Git, item.Repo, item.Head, trackingCommit, record, now)
 	if err != nil {
 		s.Log.Debug("catchup 을 판정하지 못했다", "repo", item.Repo.Root, "error", err)
 	}
@@ -476,7 +441,6 @@ func (s *Syncer) catchupConflicts(ctx context.Context, item target, now time.Tim
 			s.Log.Debug("따라잡기 기록을 남기지 못했다", "repo", item.Repo.Root, "error", err)
 		}
 	}
-	return result == judge.CatchupConflict
 }
 
 // tokenTTL은 토큰의 수명을 정한다.

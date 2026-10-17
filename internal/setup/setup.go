@@ -50,16 +50,11 @@ type tokenEntry struct {
 
 // entries는 사이드바에 놓을 토큰을 순서대로 돌려준다. 이름이 빈 토큰은 보고하지 않으므로 뺀다.
 //
-// 색은 Catppuccin Mocha 팔레트다. 뒤처짐과 충돌은 손을 써야 하는 신호라 진하게, 끝난 작업(gone,
-// merged)과 stale은 눈에 덜 띄는 회색으로 둔다.
+// 색은 Catppuccin Mocha 팔레트다. 뒤처짐은 진하게, 앞섬은 초록색으로 표시한다.
 func entries(cfg config.Resolved) []tokenEntry {
 	all := []tokenEntry{
 		{name: cfg.BehindToken, fg: "#f38ba8", bold: true},
 		{name: cfg.AheadToken, fg: "#a6e3a1"},
-		{name: cfg.GoneToken, fg: "#6c7086"},
-		{name: cfg.MergedToken, fg: "#6c7086"},
-		{name: cfg.CatchupToken, fg: "#fab387", bold: true},
-		{name: cfg.StaleToken, fg: "#6c7086", dim: true},
 	}
 	out := make([]tokenEntry, 0, len(all))
 	for _, e := range all {
@@ -73,11 +68,11 @@ func entries(cfg config.Resolved) []tokenEntry {
 // SidebarConfigured는 우리 토큰이 하나라도 config.toml에 요청되어 있는지 답한다.
 // status가 "아무것도 안 보인다"는 물음에 답할 때 쓴다.
 //
-// `$이름`을 통째로 찾는다. 부분 일치로 보면 다른 플러그인의 `$merged_prs`가 우리 `$merged`로 잡혀,
+// `$이름`을 통째로 찾는다. 부분 일치로 보면 다른 플러그인의 `$ahead_x`가 우리 `$ahead`로 잡혀,
 // 우리 토큰이 하나도 없는데 설정됐다고 답하게 된다.
 func SidebarConfigured(cfg config.Resolved, scan herdrconfig.Scan) bool {
-	for _, name := range cfg.TokenNames() {
-		if scan.HasToken(name) {
+	for _, entry := range entries(cfg) {
+		if scan.HasToken(entry.name) {
 			return true
 		}
 	}

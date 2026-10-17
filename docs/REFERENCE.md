@@ -56,15 +56,11 @@ rows = [
 |---|---|---|
 | `$behind` | `↓3` | The remote has three commits you have not received |
 | `$ahead` | `↑1` | You have one commit you have not pushed |
-| `$gone` | `gone` | The upstream branch has disappeared from the remote, often after a merge |
-| `$merged` | `merged` | HEAD's contents are already present in a remote branch |
-| `$catchup` | `conflict` | Catching up would conflict. A value appears **only for conflicts**; it is empty when clean or not behind |
-| `$sync_stale` | `stale` | Fetch has been failing long enough that the counts may be stale |
 
 Zero or inapplicable values leave the token empty, and herdr removes its space. Nothing is shown outside
-a repository or before its first commit. For a detached HEAD or a branch without an upstream, such as a
-new branch not yet pushed, only `$merged` is assessed. A newly created branch with no commits of its own
-is also `merged` if it is an ancestor of an integration branch.
+a repository or before its first commit. Sidebar tokens are also empty for a detached HEAD or a branch
+without an upstream. The sidebar shows counts only, with no `merged`, `gone`, `conflict`, or `stale`
+labels. Existing status tokens are cleared on the next report. Branch assessments remain in the worktree screen.
 
 ## Configuration
 
@@ -76,19 +72,10 @@ not exist, all settings use their defaults.
   "interval_seconds": 60,
   "throttle_seconds": 120,
   "fetch_timeout_seconds": 20,
-  "stale_after_seconds": 900,
   "behind_token": "behind",
   "ahead_token": "ahead",
-  "stale_token": "sync_stale",
   "behind_prefix": "↓",
   "ahead_prefix": "↑",
-  "stale_label": "stale",
-  "gone_token": "gone",
-  "gone_label": "gone",
-  "merged_token": "merged",
-  "merged_label": "merged",
-  "catchup_token": "catchup",
-  "catchup_conflict_label": "conflict",
   "fresh_worktrees": true,
   "enabled": true
 }
@@ -99,13 +86,15 @@ not exist, all settings use their defaults.
 | `interval_seconds` | 60 | Interval between passes over all workspaces, from 5 seconds to 24 hours |
 | `throttle_seconds` | 120 | Minimum interval before fetching the same repository again |
 | `fetch_timeout_seconds` | 20 | Fetch timeout per repository |
-| `stale_after_seconds` | 900 | Show `stale` after failures have continued this long |
-| `gone_token` | `gone` | Token name reported when the upstream disappears from the remote |
-| `gone_label` | `gone` | Value reported in that case |
-| `merged_token` | `merged` | Token name reported when HEAD is already present in a remote branch |
-| `merged_label` | `merged` | Value reported in that case |
-| `catchup_token` | `catchup` | Token name used to report catch-up conflicts |
-| `catchup_conflict_label` | `conflict` | Value reported only for conflicts; empty when clean |
+| `stale_after_seconds` | 900 | Legacy compatibility setting. No sidebar warning is displayed |
+| `gone_token` | `gone` | Legacy sidebar token to clear |
+| `gone_label` | `gone` | Legacy compatibility setting. No longer displayed |
+| `merged_token` | `merged` | Legacy sidebar token to clear. Always reported with an empty value |
+| `merged_label` | `merged` | Legacy compatibility setting. Read but no longer displayed |
+| `catchup_token` | `catchup` | Legacy sidebar token to clear |
+| `catchup_conflict_label` | `conflict` | Legacy compatibility setting. No longer displayed |
+| `stale_token` | `sync_stale` | Legacy sidebar token to clear |
+| `stale_label` | `stale` | Legacy compatibility setting. No longer displayed |
 | `fresh_worktrees` | true | Bring newly created worktrees up to date with their remote base |
 | `enabled` | true | When false, clear the plugin's tokens and stop doing work |
 
@@ -118,8 +107,8 @@ repository and each checkout's HEAD, including linked worktrees. It does not sca
 contents. Unchanged checks execute no Git commands, fetches, or metadata reports. A changed repository
 or checkout recalculates its tokens; a failed report retries on the next check. Reporting rereads HEAD
 and is serialized so a slow fetch cannot overwrite a newer local pull result with its old HEAD.
-New or moved workspaces are discovered by the existing focus/scheduled passes. `gone` and `stale`
-continue to use plugin fetch records; detecting a local ref change does not establish remote success.
+New or moved workspaces are discovered by the existing focus/scheduled passes.
+Detecting a local ref change does not establish remote success.
 Detection runs independently of fetch, but Git calculations and herdr reporting still take time.
 
 ## Worktree screen
@@ -295,7 +284,7 @@ herdr startup hook ─┐
                     ├─► daemon (runs outside herdr)
 focus events ───────┘       │
   write a note, then exit   ├─ narrow fetches per repository (current and integration branches)
-                           ├─ gone / merged / catchup assessment per workspace
+                           ├─ commit counts and catchup cache for the worktree screen
                            └─ token reporting per workspace
 ```
 
@@ -351,19 +340,10 @@ runs `merge --ff-only`. A fast-forward preserves existing commits. If the worktr
 branch already has its own commits, or multiple possible base branches make the choice ambiguous,
 it does nothing.
 
-**A first failure does not trigger a warning.** A brief network interruption or disconnected VPN should
-not immediately show `stale` and compete with problems that need attention. The warning depends on how
-long failures have continued.
+**Fetch failures remain in logs and records.** The sidebar displays no warning labels.
+The worktree screen assesses `gone` from its remote branch lookup.
 
-**The daemon derives `gone` from fetch failures.** It fetches the current branch's upstream as a single
-ref. If the branch was deleted remotely, fetching fails with a missing-remote-ref error; that record
-is the `gone` signal. This adds no `ls-remote` call or pruning and does not delete your refs. Because
-retrying cannot fix a missing branch, that failure does not count toward `stale`. No extra evidence is
-required, so a branch first seen after remote deletion and local pruning can still be `gone`. Repositories
-without any commits are excluded: Git configures `branch.main` even just after cloning an empty remote,
-which produces the same fetch error, but an unborn branch cannot have disappeared.
-
-**`merged` uses ancestry checks and merge-tree comparisons.** First,
+**The worktree screen assesses `merged` using ancestry checks and merge-tree comparisons.** First,
 `git for-each-ref --contains HEAD refs/remotes/` checks whether a remote branch other than the branch's
 own refs contains HEAD. Own refs include copies on every remote (`refs/remotes/<remote>/<branch>`) and
 the upstream tracking ref. A push alone makes those copies contain HEAD, so they are not evidence.
@@ -402,7 +382,7 @@ and tracking-ref commits, and reused while that pair is unchanged. Branches shar
 not evict each other's cached results. These records also live separately from fetch records, so an
 assessment cannot overwrite fetch results written by another session's daemon. Pairs that could not
 be assessed, such as unrelated histories or timeouts, are recorded too and are not retried for an hour.
-`merge-tree --write-tree` was introduced in Git 2.38. Older versions omit this token and use ancestry
+`merge-tree --write-tree` was introduced in Git 2.38. Older versions omit conflict checks and use ancestry
 alone for `merged`. The `merge_tree_supported` field in `status` reports support.
 
 **Integration branches are fetched too.** Stale tracking refs would make `merged` stale. Each integration
@@ -441,11 +421,10 @@ Start with the log file reported by `status`:
 tail -f "$(./bin/herdr-git-upstream status | sed -n 's/.*"log_path": "\(.*\)".*/\1/p')"
 ```
 
-For detailed logging, restart the daemon with `HERDR_GIT_UPSTREAM_DEBUG=1`. This level also reports why
-`merged` was assigned: an ancestry check or a merge-tree comparison with a particular integration branch.
+For detailed logging, restart the daemon with `HERDR_GIT_UPSTREAM_DEBUG=1`.
 
-If `catchup` never appears, inspect `git_version` and `merge_tree_supported` in `status`. The token is
-disabled below Git 2.38.
+If conflict assessments are missing from the worktree screen, inspect `git_version` and
+`merge_tree_supported` in `status`. Conflict checks require Git 2.38 or later.
 
 If nothing appears, usually the sidebar `rows` do not contain the tokens, or the sidebar is collapsed.
 When collapsed, herdr renders only workspace numbers and state dots. Missing configuration appears as
